@@ -715,10 +715,11 @@ def outside_in_events(top1, bottom1):
   return outer + inner
 '''
 
+'''
 def most_contacts_list_events():
-  '''
-  This algorithm is very similar to most_contacts_events(), but there is randomness. This randomness results from a heirarchial scheme which puts more instances of a unit based upon number of neighbors. The number of instances is governed by taking the integer of e^(number_of_neighbors - 1), such that units with only one neighbor will only have one instance in the list. The number of instances scales exponentially as units have more neighbors. This final list is then shuffled so that all units in the list are in random locations. A unit is chosen at random from the list and then removed. The purpose is that units with the most neighbors will most likely be sampled first, but not all of the time.
-  '''
+  #''
+  #This algorithm is very similar to most_contacts_events(), but there is randomness. This randomness results from a heirarchial scheme which puts more instances of a unit based upon number of neighbors. The number of instances is governed by taking the integer of e^(number_of_neighbors - 1), such that units with only one neighbor will only have one instance in the list. The number of instances scales exponentially as units have more neighbors. This final list is then shuffled so that all units in the list are in random locations. A unit is chosen at random from the list and then removed. The purpose is that units with the most neighbors will most likely be sampled first, but not all of the time.
+  #''
   #print relationships[:,0]
   #print relationships[:,1]
   neighbors = {}
@@ -756,6 +757,7 @@ def most_contacts_list_events():
   #print 'events', events
   #print 'length of events and ages', len(events), len(Ages)
   return events
+'''
 
 def crater_age_uncertainty_events(Uncertainty):
   '''
@@ -1362,265 +1364,124 @@ def sample_ages(events, relationships, runID, Ages, Uncertainty, event_ageKey=No
 
   return SampledAges
 
-########################################################################################################################
+###############################################################################
 def getages(Ages, style, numruns, relationships, Uncertainty):
+	'''
+	getages sorts events based on user-input strategies, and runs numruns # of 
+	simulations to sample event ages with sample_ages. Timing information is kept
+	of sorting and sampling elapsed time
+	'''
+	
+	#Result, timing, and list variables that are pre-allocated
+	results = np.zeros((len(Ages), numruns))# space to save results
+	SampledAgeslist = []      # lists of keys from SampledAges to check sorting of results
+	eventtiming = np.zeros(numruns) #Time it takes for sorting events
+	resulttiming = np.zeros(numruns) #Time it takes for sampling ages
+	
+	### Create Pre-sorting lists for some methods
+	if style == 'topdown':
+		tdlist = make_topdown_list()
+	elif style == 'bottomup':
+		bulist = make_bottomup_list()
+	elif style == 'outside_in':
+		top1 = make_topdown_list()[0]
+		bottom1 = make_bottomup_list()[0]
+	elif style == 'user_defined':
+		print 'Events will be randomly shuffled within each list, from top to bottom'
+		for idx,sublist in enumerate(Order_list):
+			print 'Level', idx+1, sublist
+	
+	### VEAM Simulations begin here:
+	for i in range(numruns):
+		eventstart = time.time()
+		event_ageKey = None
+		
+		### Determine Sorting Method
+		if style == 'random':
+			#Takes about 0.72 seconds per run for 10 and 100 runs
+			events = random_events(Ages)
+		elif style == 'topdown':
+			#Takes about 0.97 seconds per run for 100 runs. 
+			#Perhaps optimize the events list algorithm by saving the stratigraphic 
+			#orders as a list of lists, then random shuffle each list within the list 
+			#and assemble new eventlist? Not really a lot of work to spare, 
+			#could take more time...
+			events = topdown_events(tdlist)
+		elif style == 'bottomup':
+			#Takes about 0.61 seconds per run for 100 runs
+			events = bottomup_events(bulist)
+		elif style == 'outside_in':
+			#This takes about #### seconds per run for 100 runs
+			events = outside_in_events(top1, bottom1)
+		elif style == 'most_contacts':
+			#This takes about 0.85 seconds per run for 100 runs
+			events = most_contacts_events(Ages, relationships)
+		elif style == 'most_contacts_list':
+			#This takes about 0.77 seconds per run for 100 runs. 
+			#It has more code than most_contacts... 
+			#Must have to do with sample_ages and the way the recursive function works???
+			events = most_contacts_list_events()
+		elif style == 'crater_age_uncertainty':
+			#This takes about 0.96 seconds per run for 100 runs
+			events = crater_age_uncertainty_events(Uncertainty)
+		elif style == 'user_defined':
+			events = user_defined_events()
+		elif style == 'key_stratigraphic_unit':
+			#This takes about 0.96 seconds per run for 100 runs
+			events, event_ageKey = key_stratigraphic_unit_events()
+		elif style == 'ignore_strat':
+			#This takes about 1.64 seconds per run for 100 runs
+			relationships = [[0, 0], [0, 0]]
+			events = random_events(Ages)
+		eventtiming[i] = time.time() - eventstart # Time elapsed to create sorted event list
+		
+		### Sample Ages
+		resultstart = time.time()
+		sys.stdout.write("\rOn run %d out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
+		result = sample_ages(events, relationships, i, Ages, Uncertainty, event_ageKey)
+		resulttiming[i] = time.time() - resultstart
+		
+		#Store results of events and their sampled ages
+		for idx,k in enumerate(result):
+			#print i, idx, k, result[k]
+			#if min(result) != -9999:
+			results[idx, i] = result[k]
+		SampledAgeslist.append(result.keys())
+	
+	# Error checking
+	for i in range(1, len(SampledAgeslist)):
+		if SampledAgeslist[i-1] != SampledAgeslist[i]:
+			print '\nYa done goofed up... Not all data are in the proper order\n'
+			quit()
+	
+	#Done with VEAM Simulations
+	end = time.time()
+	print '\n\nThis %s simulation took' % (style), end - start, 'seconds\n'
+	print 'The event list creation took', np.mean(eventtiming), 'seconds'
+	print 'The age sampling took', np.mean(resulttiming), 'seconds'
 
-  results = np.zeros((len(Ages), numruns))# Pre-allocate space to save results
-  SampledAgeslist = []                    # Make a list to store lists of keys from SampledAges to check sorting of results
+	#Take the transpose because infile data are referenced as results[0] = all ages for Event[0]
+	resultsT = np.transpose(results)
+	#print resultsT
+	
+	### Check for bad runs
+	#Save the row numbers for runs that don't have -9999 in them#
+	#Rows with -9999 had an error#
+	nonzeroruns = []
+	badruns = []
+	for idx, i in enumerate(resultsT):
+		if -9999 not in i:
+			nonzeroruns.append(idx)
+		if -9999 in i:
+			badruns.append(idx)
+			print 'this bad run idx', idx
+			for j, ev in enumerate(i):
+				#print '%s, %0.2f;' % (SampledAgeslist[0][j], ev),
+				if ev < 0:
+					print '%s, %0.2f\t' % (SampledAgeslist[0][j], ev),
+			print '\ntotal badruns', badruns
 
-  # Pre-allocate space for saving the timing values
-  eventtiming = np.zeros(numruns)
-  resulttiming = np.zeros(numruns)
-
-  if style == 'random':
-    '''
-    Takes about 0.72 seconds per run for 10 and 100 runs
-    '''
-    for i in range(numruns):
-      eventstart = time.time()
-      events = random_events(Ages)
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\r%d runs out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'topdown':
-    '''
-    Takes about 0.97 seconds per run for 100 runs. Perhaps optimize the events list algorithm by saving the stratigraphic orders as a list of lists, then random shuffle each list within the list and assemble new eventlist? Not really a lot of work to spare, could take more time...
-    '''
-    tdlist = make_topdown_list()
-    for i in range(numruns):
-      eventstart = time.time()
-      events = topdown_events(tdlist)
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\r%d runs out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'bottomup':
-    '''
-    Takes about 0.61 seconds per run for 100 runs
-    '''
-    bulist = make_bottomup_list()
-    for i in range(numruns):
-      eventstart = time.time()
-      events = bottomup_events(bulist)
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\r%d runs out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'outside_in':
-    '''
-    This takes about #### seconds per run for 100 runs
-    '''
-    top1 = make_topdown_list()[0]
-    bottom1 = make_bottomup_list()[0]
-    for i in range(numruns):
-      eventstart = time.time()
-      events = outside_in_events(top1, bottom1)
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\r%d runs out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'most_contacts':
-    '''
-    This takes about 0.85 seconds per run for 100 runs
-    '''
-    for i in range(numruns):
-      eventstart = time.time()
-      events = most_contacts_events(Ages, relationships)
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      print '####################### RUN #%d ############################' % (i+1)
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\nCompleted %d runs out of %d\n" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #sys.stdout.write("%s, %0.2f\t" % (k, result[k]))
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      sys.stdout.write("\n")
-      SampledAgeslist.append(result.keys())
-
-  if style == 'most_contacts_list':
-    '''
-    This takes about 0.77 seconds per run for 100 runs. It has more code than most_contacts... Must have to do with sample_ages and the way the recursive function works???
-    '''
-    #Create events list!
-    for i in range(numruns):
-      eventstart = time.time()
-      events = most_contacts_list_events()
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\nCompleted %d runs out of %d\n" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'crater_age_uncertainty':
-    '''
-    This takes about 0.96 seconds per run for 100 runs
-    '''
-    for i in range(numruns):
-      eventstart = time.time()
-      events = crater_age_uncertainty_events(Uncertainty)
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\r%d runs out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'user_defined':
-    print 'Events will be randomly shuffled within each list, from top to bottom'
-    for idx,sublist in enumerate(Order_list):
-      print 'Level', idx+1, sublist
-    for i in range(numruns):
-      eventstart = time.time()
-      events = user_defined_events()
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\r%d runs out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'key_stratigraphic_unit':
-    '''
-    This takes about 0.96 seconds per run for 100 runs
-    '''
-    for i in range(numruns):
-      eventstart = time.time()
-      events, event_ageKey = key_stratigraphic_unit_events()
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty, event_ageKey)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\r%d runs out of %d" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  if style == 'ignore_strat':
-    '''
-    This takes about 1.64 seconds per run for 100 runs
-    '''
-    for i in range(numruns):
-      eventstart = time.time()
-      relationships = [[0, 0], [0, 0]]
-      #print relationships, relationships[0], relationships[1]
-      events = random_events(Ages)
-      eventend = time.time()
-      eventtiming[i] = eventend - eventstart
-      resultstart = time.time()
-      result = sample_ages(events, relationships, i, Ages, Uncertainty)
-      resultend = time.time()
-      resulttiming[i] = resultend - resultstart
-      sys.stdout.write("\nCompleted %d runs out of %d\n" % ((i+1),numruns)) # i+1, 'runs out of', numruns
-      #print result
-      for idx,k in enumerate(result):
-        #print i, idx, k, result[k]
-        #if min(result) != -9999:
-        results[idx, i] = result[k]
-      SampledAgeslist.append(result.keys())
-
-  for i in range(1, len(SampledAgeslist)):
-    if SampledAgeslist[i-1] != SampledAgeslist[i]:
-      print '\nYa done goofed up... Not all data are in the proper order\n'
-      quit() 
-
-  end = time.time()
-  print '\n\nThis %s simulation took' % (style), end - start, 'seconds\n'
-  print 'The event list creation took', np.mean(eventtiming), 'seconds'
-  print 'The age sampling took', np.mean(resulttiming), 'seconds'
-
-  ####Take the transpose because infile data are referenced as results[0] = all ages for Event[0]
-  resultsT = np.transpose(results)
-  #print resultsT
-  ####Save the row numbers for runs that don't have -9999 in them####
-  ####Rows with -9999 had an error####
-  nonzeroruns = []
-  badruns = []
-  for idx, i in enumerate(resultsT):
-    if -9999 not in i:
-      nonzeroruns.append(idx)
-    if -9999 in i:
-      badruns.append(idx)
-      print 'this bad run idx', idx
-      for j, ev in enumerate(i):
-        #print '%s, %0.2f;' % (SampledAgeslist[0][j], ev),
-        if ev < 0:
-          print '%s, %0.2f\t' % (SampledAgeslist[0][j], ev),
-      print '\ntotal badruns', badruns
-
-  return results, badruns, SampledAgeslist[0]
+	return results, badruns, SampledAgeslist[0]
 
 def veam_main(inputs):
 	#Inputs needs to be an instance of a Variable Class
@@ -2032,7 +1893,7 @@ class Window(QtWidgets.QWidget):
 			veamVars.setGeoMag(self.vGeoMag)
 			veamVars.setSorting(self.vSorting)
 			
-			self.lblSubmit.setMinimumWidth(100)
+			self.lblSubmit.setMinimumWidth(200)
 			self.lblSubmit.setText('Running VEAM...')
 			self.lblSubmit.repaint()
 			self.lblWarn.setText('')
