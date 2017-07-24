@@ -7,16 +7,17 @@ Created on Tue Jul 18 16:42:04 2017
 @author: jaricha4
 """
 
-import sys, os
+import sys, os, time, operator
 from PyQt5 import QtWidgets, QtCore, QtGui
 import numpy as np
-import time
 from scipy.stats import norm, truncnorm
 from scipy.interpolate import interp1d
 #import pylab as plt
 import random
 
 global start
+global UINT_MAX
+UINT_MAX = np.iinfo('uint32').max
 	
 def minage_finder_debug(eventID,relDB,ageDB,statement_min):
 	#Find youngest possible age for event, based on stratigraphy
@@ -672,7 +673,11 @@ def bottomup_events(a):
 
 def most_contacts_events(Ages, relationships):
   '''
-  This function looks at the Stratigraphic relationships database and counts how many instances there are of each unit in both columns. Every instance represents a neighbor. The idea here is to sample_ages of units with the most neighbors first and then sample_ages of units with progressively fewer neighbors. This scheme allows for the first unit's to be sampled according to their probability distribution function, with little to no influence from the minage/maxage recursive scheme which may trim the probability distribution function of subsequently sampled events.
+  This function looks at the Stratigraphic relationships database and counts how many instances there are of each unit in both columns. Every instance represents a neighbor. 
+  The idea here is to sample_ages of units with the most neighbors first and then sample_ages of units with progressively fewer neighbors. 
+  This scheme allows for the first unit's to be sampled according to their probability distribution function, 
+  with little to no influence from the minage/maxage recursive scheme which may trim the probability distribution 
+  function of subsequently sampled events.
   '''
   #print relationships[:,0]
   #print relationships[:,1]
@@ -1506,11 +1511,22 @@ def veam_main(inputs):
 	
 	print '\nuse_mag:', use_mag
 	
-	
+	field = eventLibrary()
 	
 	#cwd = os.getcwd()
 	for i in range(0,1):
 	  relationships, Ages, Uncertainty, Polarity, Order_list = load_databases(strat_db_file,ages_db_file)
+	  
+	  '''
+	  Changing over to class!!
+	  '''
+	  for item in Ages:
+				field.addEvent(item)
+				field.events[-1].addAgeModel(Ages[item], Uncertainty[item]) #Does this add multiple ages? It must!!
+				
+	  field.sortAgeUncertainty()
+	  
+	  '''Done with this'''
 	  
 	  if use_mag == True:
 	    Rdt = Rdt # This is the timestep used for the cumulative density function
@@ -1635,6 +1651,116 @@ def veam_main(inputs):
 	
 	return 0
 
+class event():
+	def __init__(self):
+		self.id = ''
+		self.ageModel    = [] # list of modeled ages
+		self.uncertModel = [] # list of associated uncertainties
+		self.veamAges    = [] # VEAM-simulated ages
+		self.polarity    = None #Normal='N', Reverse='R'?
+		self.stratAbove  = [] # ids of events that are immediately stratigraphically above
+		self.stratBelow  = [] # ids of events that are immediately stratigraphically lower
+		self.totalRels   = 0  # total number of stratigraphic relationships
+		self.modelChoice = 0  #
+		self.sortOrder   = 0
+		
+	def addAgeModel(self, time, uncertainty):
+		self.ageModel.append(float(time))
+		self.uncertModel.append(float(uncertainty))
+	
+	def checkStratRels(self):
+		for rel in self.stratBelow:
+			if rel in self.stratAbove:
+				return False #if a strat relationship is in both upper and lower lists, that's an error
+		return True #these lists are ok.
+		
+		def calcTotalRels(self):
+			self.totalRels = len(self.stratAbove) + len(self.stratBelow)
+		
+	
+class eventLibrary():
+	def __init__(self):
+		self.events = []
+
+	def addEvent(self,name):
+		### Create a new event
+		e = event()
+		e.id = str(name)
+		self.events.append(e)
+		
+	def checkStrat(self):
+		### Check Stratigraphy Web. 
+		#   If valid, return True, else return False
+		for e in self.events:
+			check = e.checkStratRels
+			if check == False:
+				return False
+		
+		#make a deeper check
+		
+		return True
+		
+	
+	def sortRandom(self):
+		### Sorts all events randomly
+		np.random.shuffle(self.events)
+	
+	def sortMostContacts(self):
+		### Sorts all events so events with more contacts are dated first.
+		# Events with the same number of contacts get a random shuffle
+		sortCount = 0 #Will be assigned in order 0 -> N for each event
+		
+		#Calculate number of total strat relationships for each event
+		for e in self.events:
+			e.calcTotalRels()
+		
+		#Make array of all total strat relationship counts
+		contactCount = np.array([e.totalRels for e in self.events])
+		#Go through all unique numbers of contacts with a sorted set
+		for cs in sorted(set(contactCount)):
+			#Find events that have the same number of strat contacts
+			equalEvents = np.where(contactCount==cs)[0]
+			#Give them a random shuffle
+			np.random.shuffle(equalEvents)
+			#Assign them a sort order
+			for e in equalEvents:
+				self.events[e].sortorder = sortCount
+				sortCount += 1
+		
+		#Sort all events based on sort order
+		self.events.sort(key=operator.attrgetter('sortorder'))
+	
+	def sortIgnoreStrat(self):
+		### A bit of a misnomer, just gets rid of all stratigraphic relationships
+		for e in self.events:
+			e.stratAbove  = []
+			e.stratBelow  = []
+	
+	def sortAgeUncertainty(self):
+		### Sorts all events so events with least age model uncertainty are dated first.
+		# Events with the same age uncertainty will get a random shuffle.
+		# Events with more than one age model will have one chosen for them.
+		sortCount = 0 #Will be assigned in order 0 -> N for each event
+		
+		#Choose a random age model if necessary
+		for e in self.events:
+			if len(e.ageModel) > 1:
+				e.modelChoice = np.random.randint(len(e.ageModel))
+			elif e.uncertModel[0] < 0: #the uncertainty should only be -9999 if it's the only entry
+				e.uncertModel[0] = UINT_MAX #change from -9999 to uintmax
+		
+		#Make an array of all the uncertainty values
+		uncertainties = np.array([e.uncertModel[e.modelChoice] for e in self.events])
+		for us in sorted(set(uncertainties)): #Go through all unique uncert vals
+			equalEvents = np.where(uncertainties==us)[0] #All events with same uncert
+			np.random.shuffle(equalEvents)               #Shuffle these events
+			for e in equalEvents:                        #Assign each event a sort order
+				self.events[e].sortorder = sortCount
+				sortCount += 1
+		
+		#Sort all events based on sort order
+		self.events.sort(key=operator.attrgetter('sortorder'))
+	
 class variables():
 	### Set of VEAM Variables	
 	def __init__(self):
