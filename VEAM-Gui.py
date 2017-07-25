@@ -1369,6 +1369,121 @@ def sample_ages(events, relationships, runID, Ages, Uncertainty, event_ageKey=No
 
   return SampledAges
 
+def sample_ages1(events, relationships, runID, Ages, Uncertainty, event_ageKey=None):
+	'''
+	This function generates a dictionary of sampled ages. 
+	It iterates over a list of events. 
+	It finds an acceptable age range based upon stratigraphic relationships and SampledAges. 
+	This acceptable age range then truncates the probability distribution function. 
+	A cumulative distribution function is created so that a random number from 0-1 
+		can be selected and the associated age sampled, from the cumulative distribution function. 
+	In cases where minage/maxage from stratigraphy truncate the probability distribution function 
+		to one of the tails where the probability of an event is zero, the code then chooses a 
+		random uniform age between the two bounding units. 
+	In this way, stratigraphy can override the radiometric date.
+	'''
+	SampledAges = {} # Need a for loop to create a new dictionary for SampledAges
+	#print 'relationships', relationships
+	for i in Ages:
+		SampledAges[i] = -9999 # Initially set SampledAges to -9999
+	pastevents = []
+	statement_min = []
+	statement_max = []
+	
+	for currentevent in events:
+		
+		#####FIND EVENT AGE RANGE######
+		AcceptableAge_MIN, statement_min = minage_finder_debug(currentevent,relationships,SampledAges,statement_min)
+		AcceptableAge_MAX, statement_max = maxage_finder_debug(currentevent,relationships,SampledAges,statement_max)
+		
+		#Test for valid age range
+		#if AcceptableAge_MIN >= AcceptableAge_MAX:
+			#bad_range = str(AcceptableAge_MAX-AcceptableAge_MIN)
+			#print "\n	ERROR: NO ACCEPTABLE AGE RANGE FOR EVENT ("+bad_range+" yrs)"+currentevent
+			#print AcceptableAge_MIN, AcceptableAge_MAX
+		
+		# This is where the fun begins
+		if event_ageKey == None: # If we didn't use key_stratigraphic_unit for event sorting
+			#sys.stdout.write('1')
+			try:
+				len(Ages[currentevent]) > 1 # If there is more than one age/uncertainty reported per event, randomly choose one.
+				agechoice = np.random.randint(0, len(Ages[currentevent]))
+				mu = Ages[currentevent][agechoice]
+				sigma = Uncertainty[currentevent][agechoice]
+				#sys.stdout.write('a')
+			except TypeError:
+				mu = Ages[currentevent]
+				sigma = Uncertainty[currentevent]
+				#sys.stdout.write('b')
+		
+		if sigma == 0: # If the date is historic or exact...
+			#sys.stdout.write('3')
+			SampledAges[currentevent] = mu
+			continue
+
+		if sigma != 0:
+			#sys.stdout.write('f')
+			try:
+				len(Ages[currentevent]) > 1 # If there is more than one age/uncertainty reported per event, randomly choose one.
+				agechoice = np.random.randint(0, len(Ages[currentevent]))
+				mu = Ages[currentevent][agechoice]
+				sigma = Uncertainty[currentevent][agechoice]
+			except:
+				TypeError
+				mu = Ages[currentevent]
+				sigma = Uncertainty[currentevent]
+
+			if mu == -9999:
+				#sys.stdout.write('.')
+				minage = AcceptableAge_MIN
+				maxage = AcceptableAge_MAX
+				SampledAges[currentevent] = np.random.uniform(maxage, minage)
+				#sys.stdout.write('%0.3f' % SampledAges[currentevent])
+				continue
+				#print 'min, sampled, max', minage,SampledAges[currentevent], maxage
+
+			else:
+				#sys.stdout.write(',')
+				minage = AcceptableAge_MIN
+				maxage = AcceptableAge_MAX
+
+				# Convert minage and maxage to standard normal range because a, b are the standard deviations
+				a = (minage - mu) / sigma
+				b = (maxage - mu) / sigma
+				#print 'Here are a and b', a, b, 'for unit', currentevent
+				
+				#if b-a < 0.1
+				#Just choose random normal if b-a < 0.1!!
+				
+				# Use truncated normal distribution to sample age, make sure it is greater than zero
+				SampledAges[currentevent] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+				#sys.stdout.write("a=%0.3f b=%0.3f mu=%0.3f sig=%0.3f min=%0.3f max=%0.3f age=%0.3f" % (a, b, mu, sigma, minage, maxage, SampledAges[currentevent]))
+				breakpt = 0 #break after 10
+				if SampledAges[currentevent] <=0:
+					while ((SampledAges[currentevent] <= 0) and (breakpt < 10)):
+						SampledAges[currentevent] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+						breakpt += 1
+				if np.isinf(SampledAges[currentevent]):
+					while ((np.isinf(SampledAges[currentevent])) and (breakpt < 10)):
+						SampledAges[currentevent] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+						breakpt += 1
+				
+				#If the sample is too far along the tail, just throw the age model out!
+				# and choose from a random uniform.
+				if breakpt == 10:
+					SampledAges[currentevent] = np.random.uniform(maxage, minage)
+
+				#Append 
+				if SampledAges[currentevent] < minage:
+					print 'This might be a minage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+					return -1
+
+				if SampledAges[currentevent] > maxage:
+					print 'This might be a maxage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+					return -1
+
+	return 0
+
 ###############################################################################
 def getages(Ages, style, numruns, relationships, Uncertainty):
 	'''
@@ -1677,6 +1792,9 @@ class event():
 		def calcTotalRels(self):
 			self.totalRels = len(self.stratAbove) + len(self.stratBelow)
 		
+		def chooseAgeModel(self):
+			if len(self.ageModel) > 1:
+				self.modelChoice = np.random.randint(len(self.ageModel))
 	
 class eventLibrary():
 	def __init__(self):
@@ -1704,14 +1822,20 @@ class eventLibrary():
 	def sortRandom(self):
 		### Sorts all events randomly
 		np.random.shuffle(self.events)
+		
+		#Choose a random age model if event has multiple
+		for e in self.events:
+			e.chooseAgeModel()
 	
 	def sortMostContacts(self):
 		### Sorts all events so events with more contacts are dated first.
 		# Events with the same number of contacts get a random shuffle
 		sortCount = 0 #Will be assigned in order 0 -> N for each event
 		
-		#Calculate number of total strat relationships for each event
 		for e in self.events:
+			#Choose a random age model if event has multiple
+			e.chooseAgeModel()
+			#Calculate number of total strat relationships for each event
 			e.calcTotalRels()
 		
 		#Make array of all total strat relationship counts
@@ -1735,6 +1859,10 @@ class eventLibrary():
 		for e in self.events:
 			e.stratAbove  = []
 			e.stratBelow  = []
+			
+		#Choose a random age model if event has multiple
+		for e in self.events:
+			e.chooseAgeModel()
 	
 	def sortAgeUncertainty(self):
 		### Sorts all events so events with least age model uncertainty are dated first.
@@ -1742,11 +1870,10 @@ class eventLibrary():
 		# Events with more than one age model will have one chosen for them.
 		sortCount = 0 #Will be assigned in order 0 -> N for each event
 		
-		#Choose a random age model if necessary
+		#Choose a random age model if event has multiple
 		for e in self.events:
-			if len(e.ageModel) > 1:
-				e.modelChoice = np.random.randint(len(e.ageModel))
-			elif e.uncertModel[0] < 0: #the uncertainty should only be -9999 if it's the only entry
+			e.chooseAgeModel()
+			if e.uncertModel[0] < 0: #the uncertainty should only be -9999 if it's the only entry
 				e.uncertModel[0] = UINT_MAX #change from -9999 to uintmax
 		
 		#Make an array of all the uncertainty values
@@ -1757,9 +1884,14 @@ class eventLibrary():
 			for e in equalEvents:                        #Assign each event a sort order
 				self.events[e].sortorder = sortCount
 				sortCount += 1
+			if us == UINT_MAX:                           #Return unaged events to -9999
+				for e in equalEvents:
+					self.events[e].uncertModel[0] = -9999
 		
 		#Sort all events based on sort order
 		self.events.sort(key=operator.attrgetter('sortorder'))
+	
+	
 	
 class variables():
 	### Set of VEAM Variables	
