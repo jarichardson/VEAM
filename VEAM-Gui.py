@@ -8,12 +8,11 @@ Created on Tue Jul 18 16:42:04 2017
 """
 
 import sys, os, time, operator
+#import threading, Queue #import these for parallel VEAM
 from PyQt5 import QtWidgets, QtCore, QtGui
 import numpy as np
-from scipy.stats import norm, truncnorm
+from scipy.stats import truncnorm
 from scipy.interpolate import interp1d
-#import pylab as plt
-import random
 
 global start
 global UINT_MAX
@@ -1369,7 +1368,7 @@ def sample_ages(events, relationships, runID, Ages, Uncertainty, event_ageKey=No
 
   return SampledAges
 
-def sample_ages1(events, relationships, runID, Ages, Uncertainty, event_ageKey=None):
+def sample_ages1(eventsLib):
 	'''
 	This function generates a dictionary of sampled ages. 
 	It iterates over a list of events. 
@@ -1382,19 +1381,16 @@ def sample_ages1(events, relationships, runID, Ages, Uncertainty, event_ageKey=N
 		random uniform age between the two bounding units. 
 	In this way, stratigraphy can override the radiometric date.
 	'''
-	SampledAges = {} # Need a for loop to create a new dictionary for SampledAges
-	#print 'relationships', relationships
-	for i in Ages:
-		SampledAges[i] = -9999 # Initially set SampledAges to -9999
-	pastevents = []
-	statement_min = []
-	statement_max = []
 	
-	for currentevent in events:
+	### Give each event a new age and initialize it to be -1
+	for event in eventsLib.events:
+		event.veamAges.append(-9999)
 		
-		#####FIND EVENT AGE RANGE######
-		AcceptableAge_MIN, statement_min = minage_finder_debug(currentevent,relationships,SampledAges,statement_min)
-		AcceptableAge_MAX, statement_max = maxage_finder_debug(currentevent,relationships,SampledAges,statement_max)
+	for event in eventsLib.events:
+		
+	#####FIND EVENT AGE RANGE######
+		AcceptableAge_MIN = minage_finder_debug(currentevent,relationships,SampledAges,statement_min)
+		AcceptableAge_MAX = maxage_finder_debug(currentevent,relationships,SampledAges,statement_max)
 		
 		#Test for valid age range
 		#if AcceptableAge_MIN >= AcceptableAge_MAX:
@@ -1624,8 +1620,6 @@ def veam_main(inputs):
 	numruns = inputs.sims
 	style = inputs.sorting
 	
-	print '\nuse_mag:', use_mag
-	
 	field = eventLibrary()
 	
 	#cwd = os.getcwd()
@@ -1635,12 +1629,56 @@ def veam_main(inputs):
 	  '''
 	  Changing over to class!!
 	  '''
+	  # Add events to field
 	  for item in Ages:
 				field.addEvent(item)
 				field.events[-1].addAgeModel(Ages[item], Uncertainty[item]) #Does this add multiple ages? It must!!
-				
-	  field.sortAgeUncertainty()
+
+	  sys.stdout.write('      Loaded all Events from Ages Database successfully!\n')
+			
+	  #Add Stratigraphic Relationships to Events
+	  for link in relationships:
+				#The lower is link[0], the above is link[1]
+				#event.stratAbove and stratBelow
+				both = 0
+				for event in field.events:
+					#if the event is the lower event, append the higher event to stratAbove
+					if event.id == link[0]:
+						event.stratAbove.append(link[1])
+						both += 2
+					#if the event is the higher event, append the higher event to stratBelow
+					elif event.id == link[1]:
+						event.stratBelow.append(link[0])
+						both += 1
+					#If both events have been found, go to next relationship
+					if both == 3:
+						break
+				if both == 0:#if both still = 0, neither event found
+					sys.stderr.write('Events \'%s\' and \'%s\' in stratigraphic database not found in Age database!\n' %
+																						(link[0],link[1]))
+					return -1
+				elif both != 3: #if both still = 1, lower event not found, if = 2, higher event not found
+					sys.stderr.write('Event \'%s\' in Stratigraphic database not found in Age database!\n' % 
+																						(link[both-1]))
+					return -1
 	  
+	  #Check Stratigraphy then find expanded stratigraphic relationships for all events
+	  check = field.checkAllStrat()
+	  if check == -1:
+				return -1
+	  check = field.getFullStratLists(len(relationships))
+	  if check == -1:
+				return -1
+	  sys.stdout.write('Loaded all Relationships in Stratigraphy Database successfully!\n')
+	  
+	  #Sort by Age Uncertainty
+	  field.sortAgeUncertainty()
+	  #Get indices to all expanded strat relationships for fast min/max age finding later
+	  field.getStratIndices()
+	  sys.stdout.write('\nEvents Sorted according to Age Uncertainty\n')
+	  
+	  #ret = sample_ages1(field)
+	  #print ret
 	  '''Done with this'''
 	  
 	  if use_mag == True:
@@ -1766,7 +1804,7 @@ def veam_main(inputs):
 	
 	return 0
 
-class event():
+class Event():
 	def __init__(self):
 		self.id = ''
 		self.ageModel    = [] # list of modeled ages
@@ -1775,9 +1813,13 @@ class event():
 		self.polarity    = None #Normal='N', Reverse='R'?
 		self.stratAbove  = [] # ids of events that are immediately stratigraphically above
 		self.stratBelow  = [] # ids of events that are immediately stratigraphically lower
+		self.allAbove    = [] # ids of events indirectly above this event
+		self.allBelow    = [] # ids of events indirectly below this event
+		self.allAboveInd = [] # event library indices of allAbove
+		self.allBelowInd = [] # event library indices of allBelow
 		self.totalRels   = 0  # total number of stratigraphic relationships
-		self.modelChoice = 0  #
-		self.sortOrder   = 0
+		self.modelChoice = 0  # Which age model is being used in case of multiple models
+		self.sortOrder   = 0  # Where is this event in line to be dated in VEAM?
 		
 	def addAgeModel(self, time, uncertainty):
 		self.ageModel.append(float(time))
@@ -1789,54 +1831,127 @@ class event():
 				return False #if a strat relationship is in both upper and lower lists, that's an error
 		return True #these lists are ok.
 		
-		def calcTotalRels(self):
-			self.totalRels = len(self.stratAbove) + len(self.stratBelow)
-		
-		def chooseAgeModel(self):
-			if len(self.ageModel) > 1:
-				self.modelChoice = np.random.randint(len(self.ageModel))
+	def calcTotalRelCount(self):
+		self.totalRels = len(self.stratAbove) + len(self.stratBelow)
+	
+	def chooseAgeModel(self):
+		if len(self.ageModel) > 1:
+			self.modelChoice = np.random.randint(len(self.ageModel))
 	
 class eventLibrary():
 	def __init__(self):
 		self.events = []
+		self.tempEList = []
 
 	def addEvent(self,name):
 		### Create a new event
-		e = event()
+		e = Event()
 		e.id = str(name)
 		self.events.append(e)
 		
-	def checkStrat(self):
+	def checkAllStrat(self):
 		### Check Stratigraphy Web. 
 		#   If valid, return True, else return False
 		for e in self.events:
-			check = e.checkStratRels
+			check = e.checkStratRels()
 			if check == False:
 				return False
 		
 		#make a deeper check
 		
 		return True
-		
 	
+	def chooseAgeModels(self):
+		### Choose random age models for events with multiple age models
+		for e in self.events:
+			e.chooseAgeModel()
+			
+	def getFullStratLists(self, maxStratRels):
+		### Find all events above and below each event.
+		# MaxStratRels should be the number of relationships in the strat DB
+		for event in self.events:
+			#Find events above current event
+			self.tempEList = []
+			ret = self.getEventsAbove(event.id, maxStratRels)
+			if ret != 0:
+				sys.stderr.write('Error in getEventsAbove\n')
+				return -1
+			event.allAbove = sorted(set(self.tempEList)) #Store unique values in allAbove
+			#Find events below current event
+			self.tempEList = []
+			ret = self.getEventsBelow(event.id, maxStratRels)
+			if ret != 0:
+				sys.stderr.write('Error in getEventsBelow\n')
+				return -1
+			event.allBelow = sorted(set(self.tempEList)) #Store unique values in allBelow
+		return 0
+		
+			
+	def getEventsAbove(self, eID, maxAbove):
+		### Recursively finds all events above an event and makes a temporary list of their ids
+		# maxAbove should be the number of relationships in the strat DB
+		# tempEList should start empty
+		if len(self.tempEList) >= maxAbove:
+			sys.stderr.write('Infinite Loop somewhere in strat relationships (going up)\n')
+			return -1
+		for event in self.events:
+			if event.id == eID:   #Find event ID
+				if len(event.stratAbove) > 0:
+					for higher in event.stratAbove: #for all event ids in stratAbove
+						self.tempEList.append(higher)  #append the eID to the temporary list
+						self.getEventsAbove(higher, maxAbove)    #RECURSIVE GET EVENTS ABOVE
+				break
+		return 0 #return when no longer recurring
+			
+	def getEventsBelow(self, eID, maxBelow):
+		### Recursively finds all events below an event and makes a temporary list of their ids
+		# maxAbove should be the number of relationships in the strat DB
+		# tempEList should start empty
+		if len(self.tempEList) >= maxBelow:
+			sys.stderr.write('Infinite Loop somewhere in strat relationships (going down)\n')
+			return -1
+		for event in self.events:
+			if event.id == eID:   #Find event ID
+				if len(event.stratBelow) > 0:
+					for lower in event.stratBelow: #for all event ids in stratAbove
+						self.tempEList.append(lower)  #append the eID to the temporary list
+						self.getEventsBelow(lower, maxBelow)    #RECURSIVE GET EVENTS BELOW
+				break
+		return 0 #return when no longer recurring
+	
+	def getStratIndices(self):
+		### Get eventlibrary index for all upper and lower strat relationships
+		for event in self.events:
+			event.allAboveInd = []
+			event.allBelowInd = []
+			if len(event.allAbove) > 0:
+				for rel in event.allAbove:
+					for i,e in enumerate(self.events):
+						if e.id == rel: 
+							event.allAboveInd.append(i)
+							break
+			if len(event.allBelow) > 0:
+				for rel in event.allBelow:
+					for i,e in enumerate(self.events):
+						if e.id == rel:
+							event.allBelowInd.append(i)
+							break
+		return 0
+		
 	def sortRandom(self):
 		### Sorts all events randomly
 		np.random.shuffle(self.events)
-		
-		#Choose a random age model if event has multiple
-		for e in self.events:
-			e.chooseAgeModel()
+		self.chooseAgeModels() # Select which age model to use for each event
 	
 	def sortMostContacts(self):
 		### Sorts all events so events with more contacts are dated first.
 		# Events with the same number of contacts get a random shuffle
 		sortCount = 0 #Will be assigned in order 0 -> N for each event
+		self.chooseAgeModels() # Select which age model to use for each event
 		
+		#Calculate number of total strat relationships for each event
 		for e in self.events:
-			#Choose a random age model if event has multiple
-			e.chooseAgeModel()
-			#Calculate number of total strat relationships for each event
-			e.calcTotalRels()
+			e.calcTotalRelCount()
 		
 		#Make array of all total strat relationship counts
 		contactCount = np.array([e.totalRels for e in self.events])
@@ -1860,19 +1975,16 @@ class eventLibrary():
 			e.stratAbove  = []
 			e.stratBelow  = []
 			
-		#Choose a random age model if event has multiple
-		for e in self.events:
-			e.chooseAgeModel()
+		self.chooseAgeModels() # Select which age model to use for each event
 	
 	def sortAgeUncertainty(self):
 		### Sorts all events so events with least age model uncertainty are dated first.
 		# Events with the same age uncertainty will get a random shuffle.
 		# Events with more than one age model will have one chosen for them.
 		sortCount = 0 #Will be assigned in order 0 -> N for each event
+		self.chooseAgeModels() # Select which age model to use for each event
 		
-		#Choose a random age model if event has multiple
 		for e in self.events:
-			e.chooseAgeModel()
 			if e.uncertModel[0] < 0: #the uncertainty should only be -9999 if it's the only entry
 				e.uncertModel[0] = UINT_MAX #change from -9999 to uintmax
 		
@@ -2156,16 +2268,26 @@ class Window(QtWidgets.QWidget):
 			self.lblSubmit.repaint()
 			self.lblWarn.setText('')
 			self.lblWarn.repaint()
-			self.bSubmit.setStyleSheet('QPushButton {background-color: red; font-weight: bold;}')
+			self.bSubmit.setEnabled(False)
 			self.bSubmit.repaint()
 			
-			ret = veam_main(veamVars)
-			if ret==0:
+			#Create Thread with que as the return variable host for error handling
+			#This will allow VEAM to be multithreaded if desired
+			'''
+			que = Queue.Queue()
+			thr = threading.Thread(target= lambda q, arg: q.put(veam_main(arg)), args=(que, veamVars))
+			thr.start() # runs VEAM as Thread
+			thr.join() # wait till VEAM is done
+			errorFlag = que.get() #Get the return from VEAM
+			'''
+			errorFlag = veam_main(veamVars) #Run 1 instance of VEAM!
+			
+			self.bSubmit.setEnabled(True) #Re-enable the Run VEAM Button
+			if errorFlag==0:
 				self.lblSubmit.setText('VEAM Completed!!')
 				print 'VEAM Completed!!'
 			else:
 				self.lblSubmit.setText('VEAM had an error!')
-			self.bSubmit.setStyleSheet('QPushButton {background-color: skyblue; font-weight: bold;}')
 		
 	def saveCfg(self):
 		
