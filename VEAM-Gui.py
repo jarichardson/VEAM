@@ -1387,94 +1387,71 @@ def sample_ages1(eventsLib):
 		event.veamAges.append(-9999)
 		
 	for event in eventsLib.events:
+		#####FIND EVENT AGE RANGE######
+		AcceptableAge_MIN = GLOBAL_MINAGE
+		if len(event.allAboveInd) > 0:
+			for e in event.allAboveInd:
+				if eventsLib.events[e].veamAges[-1] > AcceptableAge_MIN:
+					AcceptableAge_MIN = eventsLib.events[e].veamAges[-1]
 		
-	#####FIND EVENT AGE RANGE######
-		AcceptableAge_MIN = minage_finder_debug(currentevent,relationships,SampledAges,statement_min)
-		AcceptableAge_MAX = maxage_finder_debug(currentevent,relationships,SampledAges,statement_max)
+		AcceptableAge_MAX = GLOBAL_MAXAGE
+		if len(event.allBelowInd) > 0:
+			for e in event.allBelowInd:
+				if ((eventsLib.events[e].veamAges[-1] < AcceptableAge_MAX) and 
+						(eventsLib.events[e].veamAges[-1] != -9999)):
+					AcceptableAge_MAX = eventsLib.events[e].veamAges[-1]
 		
 		#Test for valid age range
-		#if AcceptableAge_MIN >= AcceptableAge_MAX:
+		if AcceptableAge_MIN >= AcceptableAge_MAX:
 			#bad_range = str(AcceptableAge_MAX-AcceptableAge_MIN)
-			#print "\n	ERROR: NO ACCEPTABLE AGE RANGE FOR EVENT ("+bad_range+" yrs)"+currentevent
-			#print AcceptableAge_MIN, AcceptableAge_MAX
-		
+			sys.stderr.write('\n	ERROR: NO ACCEPTABLE AGE RANGE FOR EVENT \'%s\'\n' % event.id)
+			sys.stderr.write('AcceptableAge_MIN: %0.3f, AcceptableAge_MAX: %0.3\n' % (AcceptableAge_MIN, AcceptableAge_MAX))
+			
 		# This is where the fun begins
-		if event_ageKey == None: # If we didn't use key_stratigraphic_unit for event sorting
-			#sys.stdout.write('1')
-			try:
-				len(Ages[currentevent]) > 1 # If there is more than one age/uncertainty reported per event, randomly choose one.
-				agechoice = np.random.randint(0, len(Ages[currentevent]))
-				mu = Ages[currentevent][agechoice]
-				sigma = Uncertainty[currentevent][agechoice]
-				#sys.stdout.write('a')
-			except TypeError:
-				mu = Ages[currentevent]
-				sigma = Uncertainty[currentevent]
-				#sys.stdout.write('b')
+		mu    = event.ageModel[event.modelChoice]
+		sigma = event.uncertModel[event.modelChoice]
 		
 		if sigma == 0: # If the date is historic or exact...
-			#sys.stdout.write('3')
-			SampledAges[currentevent] = mu
+			event.veamAges[-1] = mu
 			continue
 
 		if sigma != 0:
-			#sys.stdout.write('f')
-			try:
-				len(Ages[currentevent]) > 1 # If there is more than one age/uncertainty reported per event, randomly choose one.
-				agechoice = np.random.randint(0, len(Ages[currentevent]))
-				mu = Ages[currentevent][agechoice]
-				sigma = Uncertainty[currentevent][agechoice]
-			except:
-				TypeError
-				mu = Ages[currentevent]
-				sigma = Uncertainty[currentevent]
-
 			if mu == -9999:
-				#sys.stdout.write('.')
-				minage = AcceptableAge_MIN
-				maxage = AcceptableAge_MAX
-				SampledAges[currentevent] = np.random.uniform(maxage, minage)
-				#sys.stdout.write('%0.3f' % SampledAges[currentevent])
+				event.veamAges[-1] = np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
 				continue
-				#print 'min, sampled, max', minage,SampledAges[currentevent], maxage
-
 			else:
-				#sys.stdout.write(',')
-				minage = AcceptableAge_MIN
-				maxage = AcceptableAge_MAX
-
 				# Convert minage and maxage to standard normal range because a, b are the standard deviations
-				a = (minage - mu) / sigma
-				b = (maxage - mu) / sigma
-				#print 'Here are a and b', a, b, 'for unit', currentevent
+				a = (AcceptableAge_MIN - mu) / sigma
+				b = (AcceptableAge_MAX - mu) / sigma
 				
-				#if b-a < 0.1
-				#Just choose random normal if b-a < 0.1!!
+				#Use Random Uniform if the area is very narrow. 
+				#This is because of likelihood of bad result with truncnorm
+				if (b-a) < 0.1:
+					np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
 				
 				# Use truncated normal distribution to sample age, make sure it is greater than zero
-				SampledAges[currentevent] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
-				#sys.stdout.write("a=%0.3f b=%0.3f mu=%0.3f sig=%0.3f min=%0.3f max=%0.3f age=%0.3f" % (a, b, mu, sigma, minage, maxage, SampledAges[currentevent]))
+				event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
 				breakpt = 0 #break after 10
-				if SampledAges[currentevent] <=0:
-					while ((SampledAges[currentevent] <= 0) and (breakpt < 10)):
-						SampledAges[currentevent] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+				if event.veamAges[-1] <=0:
+					while ((event.veamAges[-1] <= 0) and (breakpt < 10)):
+						event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
 						breakpt += 1
-				if np.isinf(SampledAges[currentevent]):
-					while ((np.isinf(SampledAges[currentevent])) and (breakpt < 10)):
-						SampledAges[currentevent] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+				if np.isinf(event.veamAges[-1]):
+					while ((np.isinf(event.veamAges[-1])) and (breakpt < 10)):
+						event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
 						breakpt += 1
 				
 				#If the sample is too far along the tail, just throw the age model out!
 				# and choose from a random uniform.
 				if breakpt == 10:
-					SampledAges[currentevent] = np.random.uniform(maxage, minage)
+					event.veamAges[-1] = np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
 
-				#Append 
-				if SampledAges[currentevent] < minage:
+				#Appen
+				if event.veamAges[-1] < AcceptableAge_MIN:
 					print 'This might be a minage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
 					return -1
 
-				if SampledAges[currentevent] > maxage:
+				if event.veamAges[-1] > AcceptableAge_MAX:
 					print 'This might be a maxage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
 					return -1
 
@@ -1677,8 +1654,8 @@ def veam_main(inputs):
 	  field.getStratIndices()
 	  sys.stdout.write('\nEvents Sorted according to Age Uncertainty\n')
 	  
-	  #ret = sample_ages1(field)
-	  #print ret
+	  ret = sample_ages1(field)
+	  print "SAMPLED:", ret
 	  '''Done with this'''
 	  
 	  if use_mag == True:
