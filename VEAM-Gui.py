@@ -3,116 +3,101 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Jul 18 16:42:04 2017
+@author: James Wilson, Jacob Richardson
 
-@author: jaricha4
+VEAM is a VOLCANIC EVENT AGE MODELER
 """
 
 import sys, os, time, operator
-#import threading, Queue #import these for parallel VEAM
+import threading, Queue
 from PyQt5 import QtWidgets, QtCore, QtGui
 import numpy as np
 from scipy.stats import truncnorm
-from scipy.interpolate import interp1d
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
-global start
 global UINT_MAX
 UINT_MAX = np.iinfo('uint32').max
-	
+
+### VEAM FUNCTIONS ###
+
 def load_databases(strat_db_file, ages_db_file):
 	#load age database using genfromtxt into 2xN string matrix
-	relationships = np.genfromtxt(strat_db_file,skip_header=1,delimiter=',',dtype=None)
+	try:
+		relationships = np.genfromtxt(strat_db_file,skip_header=1,delimiter=',',dtype=None)
+	except ValueError:
+		print '\n ERROR: Check for extra spaces, commas in the relationships in %s and try again\n' % ages_db_file
+		return -1, None
 	#load ages database using genfromtxt
 	try:
 		AgeUncertainty = np.genfromtxt(ages_db_file, skip_header=1,delimiter=',', dtype=None)
 	except:
 		ValueError
-		print '\n ERROR: Check for extra spaces in the names of events in %s and try again\n' % ages_db_file
-		quit()        
+		print '\n ERROR: Check for extra spaces, commas in the names of events in %s and try again\n' % ages_db_file
+		return -1, None
 	'''
 	print '\nThis is the age database\n', AgeUncertainty
 	'''
-	MultipleUnitCheck = []
-	Ages = {}
-	Uncertainty = {}
-	Polarity = {}
 	
-	for i in range(len(AgeUncertainty)): 
-		MultipleUnitCheck.append(AgeUncertainty[i][0])
-
-	MultipleUnitCheck = MultipleUnitCheck
-	MUCset = [entry for entry in set(MultipleUnitCheck)]
-
-	#print 'MultipleUnitCheck:', MultipleUnitCheck
-	#print 'MUCset:', MUCset
+	eventLib = eventLibrary()
 	
-	if len(MultipleUnitCheck) == len(MUCset): # If there is only one age per event...
-		for i in range(len(AgeUncertainty)):
-			Ages[AgeUncertainty[i][0]] = float(AgeUncertainty[i][1])
-			Uncertainty[AgeUncertainty[i][0]] = float(AgeUncertainty[i][2])
-			Polarity[AgeUncertainty[i][0]] = AgeUncertainty[i][4].lower()
-	if len(MultipleUnitCheck) != len(MUCset):
-		for i in range(len(AgeUncertainty)):
-			Ages[AgeUncertainty[i][0]] = float(AgeUncertainty[i][1])
-			Uncertainty[AgeUncertainty[i][0]] = float(AgeUncertainty[i][2])
-			Polarity[AgeUncertainty[i][0]] = AgeUncertainty[i][4]
-			#print AgeUncertainty[i][0], '=', AgeUncertainty[i][1]
-		#print Ages
-		CountAges = np.array([MultipleUnitCheck.count(entry) for entry in MUCset])
-		MultipleAges = np.array(Ages.keys())[np.where(CountAges > 1)[0]]
-		MultipleUnitCount = np.array(MultipleUnitCheck)
-		for event in MultipleAges:
-			eventages = AgeUncertainty[np.where(event == MultipleUnitCount)]
-			eventageslist = []
-			eventuncerlist = []
-			eventpollist = []
-			for age in eventages:				
-				#print event, '=', age[1], age[2] #AgeUncertainty[np.where(event == MultipleUnitCount)]
-				#print event, '=', age[1], age[2], age[4]
-				eventageslist.append(float(age[1]))
-				eventuncerlist.append(float(age[2]))
-				eventpollist.append(age[4].lower())
-			Ages[event] = eventageslist
-			Uncertainty[event] = eventuncerlist
-			Polarity[event] = eventpollist
-	'''
-	print '\nEvent Polarity'
-	'''
-	for key in Polarity:
-		'''
-		print key, Polarity[key]
-		'''
-		if 'normal' in Polarity[key]:
-			if 'reversed' in Polarity[key]:
-				print '\nPolarity reported for %s is both normal and reversed. Please update database file.' % key
-				quit()
-			Polarity[key] = 'n'
-
-		if 'reversed' in Polarity[key]:
-			if 'normal' in Polarity[key]:
-				print '\nPolarity reported for %s is both normal and reversed. Please update database file.' % key
-				quit()
-			Polarity[key] = 'r'
-
-		if len(Polarity[key]) != 1:
-			Polarity[key] = 'NA'
-
-	#print 'These should be the same number!!!', len(Polarity), len(set(Ages.keys()))
-
-	Order_in = []
-	events = []
-	for idx in range(len(AgeUncertainty)):
-		Order_in.append(AgeUncertainty[idx][3])
-		events.append(AgeUncertainty[idx][0])
-
-	Order_in_set = np.sort(np.array(list(set(Order_in))))
-	events = np.array(events)
-	Order_list = []
-	#for order in Order_in_set:
-		#indicies = np.where()
-		#print order, list(events[Order_in == order]), events, events[Order_in == order]
-		#Order_list.append(list(events[Order_in == order]))
-
-	return relationships, Ages, Uncertainty, Polarity, Order_list#, trueages
+	# Add events to field
+	for i,entry in enumerate(AgeUncertainty):
+		exist = 0
+		idname = entry[0]
+		age    = float(entry[1])
+		uncert = float(entry[2])
+		
+		if len(eventLib.events) > 0:
+			for e in eventLib.events:
+				if e.id==idname: #if event already exists, just add the new age model
+					e.addAgeModel(age, uncert)
+					exist = 1
+					break
+		if exist == 0:
+			eventLib.addEvent(idname)
+			eventLib.events[-1].addAgeModel(age, uncert)
+	
+	sys.stdout.write('      Loaded all Events from Ages Database successfully!\n')
+	
+	
+	
+	#Add Stratigraphic Relationships to Events
+	for link in relationships:
+		#The lower is link[0], the above is link[1]
+		#event.stratAbove and stratBelow
+		both = 0
+		for event in eventLib.events:
+			#if the event is the lower event, append the higher event to stratAbove
+			if event.id == link[0]:
+				event.stratAbove.append(link[1])
+				both += 2
+			#if the event is the higher event, append the higher event to stratBelow
+			elif event.id == link[1]:
+				event.stratBelow.append(link[0])
+				both += 1
+			#If both events have been found, go to next relationship
+			if both == 3:
+				break
+		if both == 0:#if both still = 0, neither event found
+			sys.stderr.write('Events \'%s\' and \'%s\' in stratigraphic database not found in Age database!\n' %
+																				(link[0],link[1]))
+			return -1, None
+		elif both != 3: #if both still = 1, lower event not found, if = 2, higher event not found
+			sys.stderr.write('Event \'%s\' in Stratigraphic database not found in Age database!\n' % 
+																				(link[both-1]))
+			return -1, None
+	
+	#Check Stratigraphy then find expanded stratigraphic relationships for all events
+	check = eventLib.checkAllStrat()
+	if check == -1:
+			return -1, None
+	check = eventLib.getFullStratLists(len(relationships))
+	if check == -1:
+			return -1, None
+	sys.stdout.write('Loaded all Relationships in Stratigraphy Database successfully!\n')
+	
+	return 0, eventLib
 
 def sample_ages(eventsLib):
 	'''
@@ -120,8 +105,6 @@ def sample_ages(eventsLib):
 	It iterates over a list of events. 
 	It finds an acceptable age range based upon stratigraphic relationships and SampledAges. 
 	This acceptable age range then truncates the probability distribution function. 
-	A cumulative distribution function is created so that a random number from 0-1 
-		can be selected and the associated age sampled, from the cumulative distribution function. 
 	In cases where minage/maxage from stratigraphy truncate the probability distribution function 
 		to one of the tails where the probability of an event is zero, the code then chooses a 
 		random uniform age between the two bounding units. 
@@ -203,16 +186,17 @@ def sample_ages(eventsLib):
 
 	return 0
 
-def veam_main(inputs):
+def veam_main(inputs, VEAMWin):
 	#Inputs needs to be an instance of a Variable Class
 	
 	#Define global minimum/maximum model age
 	
 	global GLOBAL_MINAGE
 	global GLOBAL_MAXAGE
-	global start
 	
 	start = time.time()
+	
+	sys.stdout.write('\nBeginning VEAM Simulation\n')
 	
 	GLOBAL_MINAGE = inputs.minAge
 	GLOBAL_MAXAGE = inputs.maxAge
@@ -224,156 +208,52 @@ def veam_main(inputs):
 	numruns = inputs.sims
 	style = inputs.sorting
 	
-	field = eventLibrary()
 	
-	relationships, Ages, Uncertainty, Polarity, Order_list = load_databases(strat_db_file,ages_db_file)
-	
-	'''
-	Changing over to class!!
-	'''
-	# Add events to field
-	for item in Ages:
-			field.addEvent(item)
-			field.events[-1].addAgeModel(Ages[item], Uncertainty[item]) #Does this add multiple ages? It must!!
-
-	sys.stdout.write('      Loaded all Events from Ages Database successfully!\n')
-		
-	#Add Stratigraphic Relationships to Events
-	for link in relationships:
-			#The lower is link[0], the above is link[1]
-			#event.stratAbove and stratBelow
-			both = 0
-			for event in field.events:
-				#if the event is the lower event, append the higher event to stratAbove
-				if event.id == link[0]:
-					event.stratAbove.append(link[1])
-					both += 2
-				#if the event is the higher event, append the higher event to stratBelow
-				elif event.id == link[1]:
-					event.stratBelow.append(link[0])
-					both += 1
-				#If both events have been found, go to next relationship
-				if both == 3:
-					break
-			if both == 0:#if both still = 0, neither event found
-				sys.stderr.write('Events \'%s\' and \'%s\' in stratigraphic database not found in Age database!\n' %
-																					(link[0],link[1]))
-				return -1
-			elif both != 3: #if both still = 1, lower event not found, if = 2, higher event not found
-				sys.stderr.write('Event \'%s\' in Stratigraphic database not found in Age database!\n' % 
-																					(link[both-1]))
-				return -1
-	
-	#Check Stratigraphy then find expanded stratigraphic relationships for all events
-	check = field.checkAllStrat()
-	if check == -1:
-			return -1
-	check = field.getFullStratLists(len(relationships))
-	if check == -1:
-			return -1
-	sys.stdout.write('Loaded all Relationships in Stratigraphy Database successfully!\n')
+	errFlag, field = load_databases(strat_db_file,ages_db_file)
+	if errFlag != 0:
+		sys.stderr.write('Error while Loading Databases\n')
+		return -1, None
 	
 	
-	ageStats = np.zeros((numruns,3))
-		
+	if style == 'ignore_strat':
+		#If sorting is ignore strat, just remove the stratigraphy entries
+		field.sortIgnoreStrat()
+	
 	for sim in range(numruns):
-		#Sort by Age Uncertainty
-		field.sortAgeUncertainty()
+		if style == 'random':
+			#Sort randomly
+			field.sortRandom()
+		elif style == 'most_contacts':
+			#Sort by Number of Strat Contacts
+			field.sortMostContacts()
+		elif style == 'crater_age_uncertainty':
+			#Sort by Age Uncertainty
+			field.sortAgeUncertainty()
+		elif style != 'ignore_strat':
+			#No more sorting strategies left, error out.
+			sys.stderr.write('Invalid sorting technique!')
+			return -1, None
+		
 		#Get indices to all expanded strat relationships for fast min/max age finding later
 		field.getStratIndices()
 		#sys.stdout.write('\nEvents Sorted according to Age Uncertainty\n')
 		
 		ret = sample_ages(field)
-		if ret == 0:
-			#sys.stdout.write('\nAll events successfully dated!\n')
-			ages = np.ones(len(field.events)) * -9999
-			for j,e in enumerate(field.events):
-				ages[j] = e.veamAges[-1]
-		else:
+		if ret != 0:
 			sys.stdout.write('\nError in dating events!\n')
 			return -1
 		
-		ageStats[sim,0] = np.mean(ages)
-		ageStats[sim,1] = np.min(ages)
-		ageStats[sim,2] = np.max(ages)
-#			print ("Sim #%-3d -- Ages, mean, min, max:\t" % sim),
-#			print np.mean(ages), np.min(ages), np.max(ages)
-		'''Done with object oriented'''
+		VEAMWin.veamProgress = int(((sim+1)*100.0)/numruns)
+		
 	
 	elapsed = time.time() - start
-	print ("ALL SIMS -- Ages, mean, min, max:\t"),
-	print np.mean(ageStats[:,0]), np.mean(ageStats[:,1]), np.mean(ageStats[:,2])
-	print "     COMPLETED %d simulations in %0.4f seconds" % (numruns, elapsed)
-	return 0
+	sys.stdout.write('     COMPLETED %d simulations in %0.4f seconds\n' % (numruns, elapsed))
 	
-	
-	resultsT = np.transpose(results)
+	#Sort events alphabetically before printing out
+	field.sortABC()
+	return 0, field
 
-	####Save the row numbers for runs that don't have -9999 in them####
-	####Rows with -9999 had an error####
-	nonzeroruns = []
-	badruns = []
-	for idx, resultT in enumerate(resultsT):
-		if -9999 not in resultT:
-			nonzeroruns.append(idx)
-		if -9999 in resultT:
-			badruns.append(idx)
-			#print 'resultT', resultT 
-			#print 'idx', idx
-			#print 'badruns', badruns
-
-
-	####These are the end results####
-	endresultsT = resultsT[nonzeroruns] 
-	endresults = np.transpose(endresultsT) 
-	print 'There are', len(nonzeroruns), 'successful runs out of', np.shape(results)[1]
-
-	# Save the results
-	np.save('results_%s' % (style), endresults)
-
-	if len(nonzeroruns) == 0:
-		print 'No successful runs'
-		return -1
-	
-	np.save('%s_eventlist.npy' % (style), SampledAgeslist)
-	
-	datafile = 'results_%s.npy' % (style)
-	data = np.load(datafile)
-	data = np.transpose(data)
-	
-	Eventlist = np.load('%s_eventlist.npy' % (style))
-	
-	print "Eventlist",Eventlist
-	
-	#if len(nonzeroruns) > 0:
-	#print len(data[0])
-	
-	
-	out = open('%s_ASCII.txt' % style, 'w')
-	print >> out, 'Parameters Used To Generate The Data Herein'
-	print >> out, 'Age Database: %s/%s' % (os.getcwd(), ages_db_file)
-	print >> out, 'Strat Database: %s/%s' % (os.getcwd(), strat_db_file)
-	print >> out, 'S: %0.5f' % GLOBAL_MAXAGE
-	print >> out, 'T: %0.5f' % GLOBAL_MINAGE
-	print >> out, 'Rdt: %0.5f' % Rdt
-	print >> out, 'Use Mag: %s' % use_mag
-	for idx, event in enumerate(Eventlist):
-		if idx != len(Eventlist)-1:
-			print >> out, '%s,' % event,
-		else:
-			print >> out, event
-	
-	for run in range(np.shape(data)[0]):
-		#print run
-		for idx, age in enumerate(data[run]):
-			if idx != len(Eventlist)-1:
-				print >> out, '%s,' % age,
-			else:
-				print >> out, age
-	
-	out.close()
-	
-	return 0
+### VEAM Variables and Structures ###
 
 class Event():
 	def __init__(self):
@@ -470,7 +350,9 @@ class eventLibrary():
 				if len(event.stratAbove) > 0:
 					for higher in event.stratAbove: #for all event ids in stratAbove
 						self.tempEList.append(higher)  #append the eID to the temporary list
-						self.getEventsAbove(higher, maxAbove)    #RECURSIVE GET EVENTS ABOVE
+						ret = self.getEventsAbove(higher, maxAbove)    #RECURSIVE GET EVENTS ABOVE
+						if ret == -1:
+							return -1
 				break
 		return 0 #return when no longer recurring
 			
@@ -486,9 +368,14 @@ class eventLibrary():
 				if len(event.stratBelow) > 0:
 					for lower in event.stratBelow: #for all event ids in stratAbove
 						self.tempEList.append(lower)  #append the eID to the temporary list
-						self.getEventsBelow(lower, maxBelow)    #RECURSIVE GET EVENTS BELOW
+						ret = self.getEventsBelow(lower, maxBelow)    #RECURSIVE GET EVENTS BELOW
+						if ret == -1:
+							return -1
 				break
 		return 0 #return when no longer recurring
+	
+	def sortABC(self):
+		self.events.sort(key=operator.attrgetter('id'))
 	
 	def getStratIndices(self):
 		### Get eventlibrary index for all upper and lower strat relationships
@@ -641,11 +528,209 @@ class variables():
 		else:
 			return False
 		
+### GUI WINDOWS ###
+class PlotCanvas(FigureCanvas):
+	def __init__(self, parent=None, width=5, height=4, dpi=100, allCDFs=None,time=None):
+		fig = Figure(figsize=(width, height), dpi=dpi)
+		
+		FigureCanvas.__init__(self, fig)
+		self.setParent(parent)
+ 
+		FigureCanvas.setSizePolicy(self,
+				QtWidgets.QSizePolicy.Expanding,
+				QtWidgets.QSizePolicy.Expanding)
+		FigureCanvas.updateGeometry(self)
+		
+		plotnum = min(len(allCDFs),1000)
+		
+		self.ax = self.figure.add_subplot(111)
+		for i in range(plotnum):
+			self.ax.plot(time,allCDFs[i],c='0.95')
+		self.ax.plot(time,allCDFs[0],c='0.95',label=('%d Individual Simulations' % plotnum))
+		self.ax.plot(time,np.mean(allCDFs, axis=0),c='r',label='Mean Cumulative Events')
+		self.ax.plot(time,np.percentile(allCDFs, 10, axis=0),c='r',ls='--',label='10%')
+		self.ax.plot(time,np.percentile(allCDFs, 90, axis=0),c='r',ls='--',label='90%')
+		self.ax.set_title('Cumulative Events with time')
+		
+		self.ax.set_xlim([min(time),max(time)])
+		self.ax.invert_xaxis()
+		self.ax.legend(loc='upper left')
+		self.ax.set_title('Cumulative Events with time')
+		self.ax.set_ylabel('Cumulative Event Count')
+		self.ax.set_xlabel('Ma before present')
+		
+		self.draw()
 
-class Window(QtWidgets.QWidget):
+class resultsWindow(QtWidgets.QWidget):
+	def __init__(self, parent=None, fieldResults=None, sims=0, ageMin=0, ageMax=0, outputHeader=''):
+		super(resultsWindow, self).__init__()
+		self.field = fieldResults
+		self.sims = int(sims)
+		self.ageMin = float(ageMin)
+		self.ageMax = float(ageMax)
+		self.outputHeader = str(outputHeader)
+		self.init_ui()
 	
-	def __init__(self):
-		super(Window, self).__init__()
+	def init_ui(self):
+		
+		self.allCDFs = self.genCDF()
+		self.graph = PlotCanvas(self, width=6, height=4,allCDFs=self.allCDFs,time=self.time)
+		
+		self.bSaveFig  = QtWidgets.QPushButton('Save Figure', self)
+		self.bSaveData = QtWidgets.QPushButton('Save Data', self)
+		self.lblFig = QtWidgets.QLabel('',self)
+		self.lblData = QtWidgets.QLabel('',self)
+		btn_box = QtWidgets.QHBoxLayout()
+		btn_box.addWidget(self.bSaveFig)
+		btn_box.addWidget(self.bSaveData)
+		lbl_box = QtWidgets.QHBoxLayout()
+		lbl_box.addWidget(self.lblFig)
+		lbl_box.addStretch()
+		lbl_box.addWidget(self.lblData)
+		all_box = QtWidgets.QVBoxLayout()
+		all_box.addWidget(self.graph)
+		all_box.addLayout(btn_box)
+		all_box.addLayout(lbl_box)
+		
+		self.setLayout(all_box)
+		
+		self.bSaveData.clicked.connect(self.saveData)
+		self.bSaveFig.clicked.connect(self.saveFig)
+		
+		self.setWindowTitle('VEAM Results')
+		self.setGeometry(250, 200, 640, 400)
+		
+		self.show()
+	
+	def saveData(self):
+		### Save results to a csv file
+		# Columns are individual events
+		# rows are individual VEAM Simulations
+		
+		filename = QtWidgets.QFileDialog.getSaveFileName(self, 'Save Results')
+		
+		try:
+			with open(filename[0], 'w') as outf:
+				outf.write(self.outputHeader)
+				#Write event names
+				for i,e in enumerate(self.field.events):
+					if i!=0:
+						outf.write(',')
+					outf.write('%s' % e.id)
+				outf.write('\n')
+				#Write simulation dates
+				for s in range(int(self.sims)):
+					for i,e in enumerate(self.field.events):
+						if i!=0:
+							outf.write(',')
+						outf.write('%0.3f' % e.veamAges[s])
+					outf.write('\n')
+		except EnvironmentError:
+			self.lblData.setText('')
+			return -1
+		
+		self.lblData.setText('Data Saved!')
+		return 0
+	
+		
+	def saveFig(self):
+		filename = QtWidgets.QFileDialog.getSaveFileName(self, 'Save Configuration File')
+		pngT = ['png','unknown']
+		jpgT = ['jpg', 'jpeg']
+		tifT = ['tif','tiff']
+		
+		if len(filename[0])==0:
+			self.lblFig.setText('Figure Not Saved')
+			return -1
+			
+		figType = filename[0].split('.')[-1]
+		
+		if figType in jpgT:
+			self.graph.print_jpg(filename[0])
+		elif figType in pngT:
+			self.graph.print_png(filename[0])
+		elif figType in tifT:
+			self.graph.print_tif(filename[0])
+		else:
+			self.graph.print_png(filename[0]+'.png')
+				
+		
+		self.lblFig.setText('Figure Saved!')
+	
+	def cumFunc(self, data, time):
+		### Create a CDF Function given a list of event times (data) in time bins (time)
+		events = len(data)                #returns (length,width) of data
+		simulation_bins = range(events+1) #histogram bins for the cumulative functions  
+		CDF_func = np.zeros(len(time))    #Empty Mean Cumulative Function list
+		
+		for i,t in enumerate(time): #For each time bin
+			#Time Histogram...
+			histogram_t = np.histogram(np.where(data>t)[0],bins=simulation_bins)[0]
+			#Average of events in MC solutions with time (CDF)
+			CDF_func[i] = np.mean(histogram_t) * events
+		
+		return CDF_func
+		
+	def genCDF(self):
+		### Generate CDFs for all simulations
+		# This routine comes from cdf2rr.py
+		self.ageStep = (self.ageMax - self.ageMin)/50.0
+		self.time = np.arange(self.ageMin,self.ageMax,self.ageStep)
+		
+		sims = len(self.field.events[0].veamAges)
+		
+		### CDF for each Simulation
+		cdfEach = np.zeros(( sims,len(self.time) ))
+		simAges = np.zeros(len(self.field.events))
+		
+		for s in range(sims):
+			#Get ages for this simulation
+			for i,e in enumerate(self.field.events):
+				simAges[i] = float(e.veamAges[s])
+			#Get CDF for this simulation
+			cdfEach[s] = self.cumFunc(simAges,self.time)
+		
+		return cdfEach
+
+
+
+class progressWindow(QtWidgets.QWidget):
+	def __init__(self, parent=None):
+		super(progressWindow, self).__init__()
+		self.init_ui()
+	
+	def init_ui(self):
+		self.progress = QtWidgets.QProgressBar(self)
+		
+		self.btn = QtWidgets.QPushButton("Results", self)
+		self.btn.setEnabled(False)
+		
+		h_box = QtWidgets.QHBoxLayout() #Vertical box
+		h_box.addWidget(self.progress)
+		h_box.addWidget(self.btn)
+		
+		v_box = QtWidgets.QVBoxLayout()
+		v_box.addWidget(QtWidgets.QLabel('Running Veam...'))
+		v_box.addLayout(h_box)
+		
+		self.setLayout(v_box)
+		self.setGeometry(250, 200, 400, 10)
+		
+		self.btn.clicked.connect(self.getResults)
+		
+		self.setWindowTitle('Running VEAM...')
+		self.show()
+		
+	def getResults(self):
+			#Open Results Window, close this window
+			
+			self.close()
+	
+
+class mainWindow(QtWidgets.QWidget):
+	
+	def __init__(self, parent=None):
+		super(mainWindow, self).__init__()
 		self.init_ui()
 		
 	def init_ui(self):
@@ -802,7 +887,7 @@ class Window(QtWidgets.QWidget):
 		
 		self.setLayout(v_box)
 		self.setWindowTitle('VEAM | Volcanic Event Age Model')
-		self.setGeometry(100, 100, 600, 400)
+		self.setGeometry(200, 100, 600, 400)
 		
 		### Actions
 		
@@ -816,9 +901,25 @@ class Window(QtWidgets.QWidget):
 		
 		self.show()
 	
+	def results(self):
+		### Prepare a header for outputting ascii data and open the results window
+		
+			self.outputheader =  'Parameters\n'
+			self.outputheader = self.outputheader + ('  Age Database:          %s\n' % self.vAgeDB)
+			self.outputheader = self.outputheader + ('  Stratigraphy Database: %s\n' % self.vStratDB)
+			self.outputheader = self.outputheader + ('  Min Age: %s\t Max Age: %s\n' % (self.vMinAge, self.vMaxAge))
+			self.outputheader = self.outputheader + ('  VEAM Simulations:      %s\n' % self.vSims)
+			self.outputheader = self.outputheader + ('  Event Sorting Style:   %s\n' % self.vSorting)
+			self.outputheader = self.outputheader + ('  Use Geomagnetic Data?  %s\n' % self.vGeoMag)
+			self.lblSubmit.setText('Viewing Results')
+			
+			self.resultsWin = resultsWindow(fieldResults=self.field, sims=self.vSims,
+																	ageMax=self.vMaxAge, ageMin=self.vMinAge,
+																	outputHeader=self.outputheader, parent=self)
+			#self.resultsWin.bSaveData.clicked.connect(self.saveResults)
+		
 	def runVeam(self):
 		### Run a check function that formats the form data first!
-		
 		
 		check = 0
 		check = self.checkCfg()
@@ -842,24 +943,39 @@ class Window(QtWidgets.QWidget):
 			self.bSubmit.setEnabled(False)
 			self.bSubmit.repaint()
 			
+			
+			#Open the results window!
+			self.progressWin = progressWindow(parent=self)
+			self.veamProgress = 0
 			#Create Thread with que as the return variable host for error handling
 			#This will allow VEAM to be multithreaded if desired
-			'''
 			que = Queue.Queue()
-			thr = threading.Thread(target= lambda q, arg: q.put(veam_main(arg)), args=(que, veamVars))
+			thr = threading.Thread(target= lambda q, var, win: q.put(veam_main(var, win)), args=(que, veamVars, self))
 			thr.start() # runs VEAM as Thread
+			
+			#During VEAM run, allow the windows to update and be used if needed
+			while thr.is_alive():
+				QtCore.QCoreApplication.processEvents()
+				self.progressWin.progress.setValue(self.veamProgress)
+				time.sleep(0.1)
+			
 			thr.join() # wait till VEAM is done
-			errorFlag = que.get() #Get the return from VEAM
-			'''
-			errorFlag = veam_main(veamVars) #Run 1 instance of VEAM!
+			errorFlag, self.field = que.get() #Get the return from VEAM
+			
+			#errorFlag, self.field = veam_main(veamVars, self) #Run 1 instance of VEAM!
 			
 			self.bSubmit.setEnabled(True) #Re-enable the Run VEAM Button
 			if errorFlag==0:
 				self.lblSubmit.setText('VEAM Completed!!')
-				print 'VEAM Completed!!'
+				sys.stdout.write('\nVEAM Completed!!\n\n')
+				self.progressWin.progress.setValue(100)
+				self.progressWin.btn.setEnabled(True)
+				self.progressWin.btn.clicked.connect(self.results)
+				
 			else:
 				self.lblSubmit.setText('VEAM had an error!')
-		
+				self.progressWin.close()
+	
 	def saveCfg(self):
 		
 		### Run a check function that formats the form data first!
@@ -1069,6 +1185,10 @@ class Window(QtWidgets.QWidget):
 		self.checkCfg()
 		
 		self.lblWarn.setText('Configuration Loaded!')
+		
+	def open_path(self,le):
+		filename = QtWidgets.QFileDialog.getOpenFileName(self, 'Database File Path')
+		le.setText(filename[0])
 
 
 def main():
@@ -1078,7 +1198,7 @@ def main():
 		app = QtWidgets.QApplication(sys.argv)
 
 	### Create a Window
-	VEAM_window = Window()
+	VEAM_window = mainWindow()
 	
 	#Exit upon closed window
 	sys.exit(app.exec_())
