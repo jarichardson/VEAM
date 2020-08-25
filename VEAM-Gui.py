@@ -9,7 +9,7 @@ VEAM is a VOLCANIC EVENT AGE MODELER
 """
 
 import sys, os, time, operator
-import threading, Queue
+import threading, queue
 from PyQt5 import QtWidgets, QtCore, QtGui
 import numpy as np
 from scipy.stats import truncnorm
@@ -24,19 +24,19 @@ UINT_MAX = np.iinfo('uint32').max
 def load_databases(strat_db_file, ages_db_file):
 	#load age database using genfromtxt into 2xN string matrix
 	try:
-		relationships = np.genfromtxt(strat_db_file,skip_header=1,delimiter=',',dtype=None)
+		relationships = np.genfromtxt(strat_db_file,skip_header=1,delimiter=',',dtype='unicode')
 	except ValueError:
-		print '\n ERROR: Check for extra spaces, commas in the relationships in %s and try again\n' % ages_db_file
+		sys.stderr.write('\n ERROR: Check for extra spaces, commas in the relationships in %s and try again\n' % ages_db_file)
 		return -1, None
 	#load ages database using genfromtxt
 	try:
-		AgeUncertainty = np.genfromtxt(ages_db_file, skip_header=1,delimiter=',', dtype=None)
+		AgeUncertainty = np.genfromtxt(ages_db_file, skip_header=1,delimiter=',', dtype='unicode')
 	except:
 		ValueError
-		print '\n ERROR: Check for extra spaces, commas in the names of events in %s and try again\n' % ages_db_file
+		sys.stderr.write('\n ERROR: Check for extra spaces, commas in the names of events in %s and try again\n' % ages_db_file)
 		return -1, None
 	'''
-	print '\nThis is the age database\n', AgeUncertainty
+	sys.stdout.write('\nThis is the age database\n', AgeUncertainty)
 	'''
 	
 	eventLib = eventLibrary()
@@ -177,11 +177,11 @@ def sample_ages(eventsLib):
 
 				#Appen
 				if event.veamAges[-1] < AcceptableAge_MIN:
-					print 'This might be a minage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+					sys.stderr.write('This might be a minage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 					return -1
 
 				if event.veamAges[-1] > AcceptableAge_MAX:
-					print 'This might be a maxage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'
+					sys.stderr.write('This might be a maxage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
 					return -1
 
 	return 0
@@ -469,9 +469,10 @@ class variables():
 		
 		self.minAge  = 0.0
 		self.maxAge  = 0.0
+		self.res     = 0.0
+		self.ageUnit = ''
 		self.ageDB   = ''
 		self.stratDB = ''
-		self.res     = 0.0
 		self.sims    = 0
 		self.geoMag  = False
 		self.igStrat = False
@@ -493,10 +494,13 @@ class variables():
 		except ValueError:
 			return False
 		return True
+	
+	def setAgeUnit(self,t):
+		self.ageUnit = str(t)
 		
 	def setAgeDB(self,db):
 		self.ageDB = str(db)
-	
+
 	def setStratDB(self,db):
 		self.stratDB = str(db)
 	
@@ -530,7 +534,7 @@ class variables():
 		
 ### GUI WINDOWS ###
 class PlotCanvas(FigureCanvas):
-	def __init__(self, parent=None, width=5, height=4, dpi=100, allCDFs=None,time=None):
+	def __init__(self, parent=None, width=5, height=4, dpi=100, allCDFs=None,time=None, unit=''):
 		fig = Figure(figsize=(width, height), dpi=dpi)
 		
 		FigureCanvas.__init__(self, fig)
@@ -557,24 +561,25 @@ class PlotCanvas(FigureCanvas):
 		self.ax.legend(loc='upper left')
 		self.ax.set_title('Cumulative Events with time')
 		self.ax.set_ylabel('Cumulative Event Count')
-		self.ax.set_xlabel('Ma before present')
+		self.ax.set_xlabel('%s before present' % unit)
 		
 		self.draw()
 
 class resultsWindow(QtWidgets.QWidget):
-	def __init__(self, parent=None, fieldResults=None, sims=0, ageMin=0, ageMax=0, outputHeader=''):
+	def __init__(self, parent=None, fieldResults=None, sims=0, ageMin=0, ageMax=0, outputHeader='', ageUnit=''):
 		super(resultsWindow, self).__init__()
 		self.field = fieldResults
 		self.sims = int(sims)
 		self.ageMin = float(ageMin)
 		self.ageMax = float(ageMax)
 		self.outputHeader = str(outputHeader)
+		self.ageUnit = ageUnit
 		self.init_ui()
 	
 	def init_ui(self):
 		
 		self.allCDFs = self.genCDF()
-		self.graph = PlotCanvas(self, width=6, height=4,allCDFs=self.allCDFs,time=self.time)
+		self.graph = PlotCanvas(self, width=6, height=4,allCDFs=self.allCDFs,time=self.time,unit=self.ageUnit)
 		
 		self.bSaveFig  = QtWidgets.QPushButton('Save Figure', self)
 		self.bSaveData = QtWidgets.QPushButton('Save Data', self)
@@ -598,7 +603,7 @@ class resultsWindow(QtWidgets.QWidget):
 		self.bSaveFig.clicked.connect(self.saveFig)
 		
 		self.setWindowTitle('VEAM Results')
-		self.setGeometry(250, 200, 640, 400)
+		self.setGeometry(250, 200, 640, 500)
 		
 		self.show()
 	
@@ -755,24 +760,19 @@ class mainWindow(QtWidgets.QWidget):
 		self.lblYoung = QtWidgets.QLabel('Minimum Possible Age:')
 		self.lblOld   = QtWidgets.QLabel('Maximum Possible Age:')
 		self.lblRes   = QtWidgets.QLabel('Temporal Resolution:')
+		self.lblUnit  = QtWidgets.QLabel('Age Unit:')
 		self.leYoung  = QtWidgets.QLineEdit()
 		self.leOld    = QtWidgets.QLineEdit()
 		self.leRes    = QtWidgets.QLineEdit()
-		self.cbxYoung = QtWidgets.QComboBox(self)
-		self.cbxOld   = QtWidgets.QComboBox(self)
-		self.cbxRes   = QtWidgets.QComboBox(self)
+		self.cbxAgeUnits = QtWidgets.QComboBox()
 		#self.optYoung = QtWidgets.QComboBox
 		
-		self.cbxYoung.addItems(('Ma', 'ka', 'a'))
-		self.cbxOld.addItems(('Ma', 'ka', 'a'))
-		self.cbxRes.addItems(('Ma', 'ka', 'a'))
+		self.cbxAgeUnits.addItems(('Ga', 'Ma', 'ka', 'a'))
 		
 		hYoung = QtWidgets.QHBoxLayout() #Young Hor Entry Box
 		hYoung.addWidget(self.leYoung)
-		hYoung.addWidget(self.cbxYoung)
 		hOld = QtWidgets.QHBoxLayout() #Old Hor Entry Box
 		hOld.addWidget(self.leOld)
-		hOld.addWidget(self.cbxOld)
 		gAges = QtWidgets.QGridLayout() #Young-Old Grid
 		gAges.setVerticalSpacing(2)
 		gAges.setHorizontalSpacing(100)
@@ -780,15 +780,22 @@ class mainWindow(QtWidgets.QWidget):
 		gAges.addWidget(self.lblOld, 1, 2)
 		gAges.addLayout(hYoung, 2, 1)
 		gAges.addLayout(hOld, 2, 2)
+		gAges.addWidget(self.lblRes, 3, 1)
+		gAges.addWidget(self.lblUnit, 3, 2)
+		gAges.addWidget(self.leRes, 4, 1)
+		gAges.addWidget(self.cbxAgeUnits, 4, 2)
+		'''
 		hRes = QtWidgets.QHBoxLayout() #Age Resolution Hor Box
 		hRes.addWidget(self.lblRes)
 		hRes.addWidget(self.leRes)
-		hRes.addWidget(self.cbxRes)
 		hRes.addStretch()
+		hRes.addWidget(self.lblUnit)
+		hRes.addWidget(self.cbxRes)
+		hRes.addStretch()'''
 		
 		vAges = QtWidgets.QVBoxLayout() #Total Age Range Box Layout
 		vAges.addLayout(gAges)
-		vAges.addLayout(hRes)
+		#vAges.addLayout(hRes)
 		
 		gpAges = QtWidgets.QGroupBox('Potential Volcanic Age Range') #Age Span groupbox
 		gpAges.setLayout(vAges)
@@ -800,16 +807,12 @@ class mainWindow(QtWidgets.QWidget):
 		self.leStratDB  = QtWidgets.QLineEdit()
 		self.bAgeDB     = QtWidgets.QPushButton('...')
 		self.bStratDB   = QtWidgets.QPushButton('...')
-		self.cbxAgeUnits = QtWidgets.QComboBox()
-		
-		self.cbxAgeUnits.addItems(('Ma', 'ka', 'a'))
 		
 		gPath = QtWidgets.QGridLayout() #File Paths group Layout
 		gPath.setSpacing(2)
 		gPath.addWidget(self.lblAgeDB, 1, 0)
 		gPath.addWidget(self.leAgeDB, 1, 1)
 		gPath.addWidget(self.bAgeDB, 1, 2)
-		gPath.addWidget(self.cbxAgeUnits, 1, 3)
 		gPath.addWidget(self.lblStratDB, 2, 0)
 		gPath.addWidget(self.leStratDB, 2, 1)
 		gPath.addWidget(self.bStratDB, 2, 2)
@@ -907,7 +910,8 @@ class mainWindow(QtWidgets.QWidget):
 			self.outputheader =  'Parameters\n'
 			self.outputheader = self.outputheader + ('  Age Database:          %s\n' % self.vAgeDB)
 			self.outputheader = self.outputheader + ('  Stratigraphy Database: %s\n' % self.vStratDB)
-			self.outputheader = self.outputheader + ('  Min Age: %s\t Max Age: %s\n' % (self.vMinAge, self.vMaxAge))
+			self.outputheader = self.outputheader + ('  Min Age: %s\t Max Age: %s\t Units: %s\n' 
+											% (self.vMinAge, self.vMaxAge, self.unitStrAgeDB))
 			self.outputheader = self.outputheader + ('  VEAM Simulations:      %s\n' % self.vSims)
 			self.outputheader = self.outputheader + ('  Event Sorting Style:   %s\n' % self.vSorting)
 			self.outputheader = self.outputheader + ('  Use Geomagnetic Data?  %s\n' % self.vGeoMag)
@@ -915,7 +919,8 @@ class mainWindow(QtWidgets.QWidget):
 			
 			self.resultsWin = resultsWindow(fieldResults=self.field, sims=self.vSims,
 																	ageMax=self.vMaxAge, ageMin=self.vMinAge,
-																	outputHeader=self.outputheader, parent=self)
+																	outputHeader=self.outputheader, 
+																	ageUnit= self.unitStrAgeDB, parent=self)
 			#self.resultsWin.bSaveData.clicked.connect(self.saveResults)
 		
 	def runVeam(self):
@@ -929,6 +934,7 @@ class mainWindow(QtWidgets.QWidget):
 			veamVars.setMaxAge(self.vMaxAge)
 			veamVars.setMinAge(self.vMinAge)
 			veamVars.setResolution(self.vResol)
+			veamVars.setAgeUnit(self.unitStrAgeDB)
 			veamVars.setAgeDB(self.vAgeDB)
 			veamVars.setStratDB(self.vStratDB)
 			veamVars.setSimulations(self.vSims)
@@ -949,7 +955,7 @@ class mainWindow(QtWidgets.QWidget):
 			self.veamProgress = 0
 			#Create Thread with que as the return variable host for error handling
 			#This will allow VEAM to be multithreaded if desired
-			que = Queue.Queue()
+			que = queue.Queue()
 			thr = threading.Thread(target= lambda q, var, win: q.put(veam_main(var, win)), args=(que, veamVars, self))
 			thr.start() # runs VEAM as Thread
 			
@@ -1010,31 +1016,17 @@ class mainWindow(QtWidgets.QWidget):
 		
 	def checkCfg(self):
 		### Check that the form is filled correctly
+        ### ALSO THIS IS WHERE VARIABLES FROM THE GUI ARE ASSIGNED TO CODE IF THEY ARE VALID ###
 		
 		errStyle = 'QLineEdit {background-color: pink}'
 		valStyle = 'QLineEdit {background-color: white}'
 		errMsg   = []
 		
-		#Find ComboBox Units (Ma, ka, or a)
-		unitStrYoung = str(self.cbxYoung.currentText())
-		unitStrOld   = str(self.cbxOld.currentText())
-		unitStrRes   = str(self.cbxRes.currentText())
+		#Find ComboBox Units (Ga, Ma, ka, or a)
 		self.unitStrAgeDB = str(self.cbxAgeUnits.currentText())
-		if self.unitStrAgeDB=='Ma': multDB = 1e-6;
-		elif self.unitStrAgeDB=='ka': multDB = 1e-3;
-		else: multDB = 1; #unit will be 'a'
-		if unitStrYoung=='Ma': multYoung = 1e6 * multDB;
-		elif unitStrYoung=='ka': multYoung = 1e3 * multDB;
-		else: multYoung = multDB;
-		if unitStrOld=='Ma': multOld = 1e6 * multDB;
-		elif unitStrOld=='ka': multOld = 1e3 * multDB;
-		else: multOld = multDB;
-		if unitStrRes=='Ma': multRes = 1e6 * multDB;
-		elif unitStrRes=='ka': multRes = 1e3 * multDB;
-		else: multRes = multDB;
 		
 		try:                                  #Young lineEdit
-			minA = float(self.leYoung.text()) * multYoung #Call variable to float
+			minA = float(self.leYoung.text()) #Call variable to float
 			self.vMinAge  = '%0.6f' % minA        #Set string variable
 			if minA >= 0:                         #Has to be a valid age
 				self.leYoung.setStyleSheet(valStyle) #set valid style for lineEdit
@@ -1047,7 +1039,7 @@ class mainWindow(QtWidgets.QWidget):
 			self.vMinAge  = str(self.leYoung.text()) #Set string variable still
 		
 		try:                                  #Old lineEdit
-			maxA = float(self.leOld.text()) * multOld
+			maxA = float(self.leOld.text())
 			self.vMaxAge  = '%0.6f' % maxA
 			self.leOld.setStyleSheet(valStyle)
 			if len(errMsg)==0:
@@ -1060,7 +1052,7 @@ class mainWindow(QtWidgets.QWidget):
 			self.vMaxAge  = str(self.leOld.text())
 		
 		try:                                     #Temporal Resolution
-			res = float(self.leRes.text()) * multRes
+			res = float(self.leRes.text())
 			self.vResol   = '%0.6f' % res
 			if res > 0:  #Resolution must be positive
 				self.leRes.setStyleSheet(valStyle)
@@ -1173,14 +1165,8 @@ class mainWindow(QtWidgets.QWidget):
 		try:
 			self.unitStrAgeDB = str(inputs[l+10].split(': ')[1])
 			self.cbxAgeUnits.setCurrentText(self.unitStrAgeDB)
-			self.cbxYoung.setCurrentText(self.unitStrAgeDB)
-			self.cbxOld.setCurrentText(self.unitStrAgeDB)
-			self.cbxRes.setCurrentText(self.unitStrAgeDB)
 		except IndexError: #If no unit is found, just assume 'Ma'
 			self.cbxAgeUnits.setCurrentText('Ma')
-			self.cbxYoung.setCurrentText('Ma')
-			self.cbxOld.setCurrentText('Ma')
-			self.cbxRes.setCurrentText('Ma')
 		
 		self.checkCfg()
 		
