@@ -64,7 +64,7 @@ def load_databases(strat_db_file, ages_db_file):
 	
 	#Add Stratigraphic Relationships to Events
 	for link in relationships:
-		#The lower is link[0], the above is link[1]
+		#The lower event is link[0], the higher event is link[1]
 		#event.stratAbove and stratBelow
 		both = 0
 		for event in eventLib.events:
@@ -88,8 +88,9 @@ def load_databases(strat_db_file, ages_db_file):
 																				(link[both-1]))
 			return -1, None
 	
+	
 	#Check Stratigraphy then find expanded stratigraphic relationships for all events
-	check = eventLib.checkAllStrat()
+	check = eventLib.checkAllStrat(relationships)
 	if check == -1:
 			return -1, None
 	check = eventLib.getFullStratLists(len(relationships))
@@ -277,6 +278,8 @@ class Event():
 		self.uncertModel.append(float(uncertainty))
 	
 	def checkStratRels(self):
+		#This is a naive check to see if there is a direct contridiction in the
+		#Stratigraphy database.
 		for rel in self.stratBelow:
 			if rel in self.stratAbove:
 				return False #if a strat relationship is in both upper and lower lists, that's an error
@@ -300,17 +303,48 @@ class eventLibrary():
 		e.id = str(name)
 		self.events.append(e)
 		
-	def checkAllStrat(self):
-		### Check Stratigraphy Web. 
+	def checkAllStrat(self,relList):
+		### Check Stratigraphy Web. Needs relationships, an Nx2 array of all 
+		# Stratigraphic Relationships in StratDB file.
 		#   If valid, return True, else return False
 		for e in self.events:
+			'''
 			check = e.checkStratRels()
 			if check == False:
 				return False
+			'''
+			eID = e.id
+			#print("Interrogating event:", eID)
+			errorFlag = self.findProblemStrat(eID, relList, [eID]) 
+			if len(errorFlag):
+				sys.stderr.write("\n\nERROR: There is a stratigraphic loop with\n these vents:\n")
+				for event in errorFlag:
+					sys.stderr.write("  - "+event+"\n")
+				return -1
+		return 0
 		
 		#make a deeper check
 		
 		return True
+	
+	def findProblemStrat(self,curEvent,relList,eventsAbove):
+		#This is similar to getEventsBelow, but specifically finds problematic 
+		#Contridictions in the Stratigraphy Web.
+		for r in relList:
+			if curEvent == r[1]: #If the current event is in the upper position
+				#print(r[0],r[1])
+				#print ('event ', r[1], ' is above ', r[0])
+				if r[0] in eventsAbove:
+					#THIS MEANS THERE IS AN ERROR and it was JUST FIRST CAUGHT NOW
+					#Crop the eventsabove list to exclude events outside the loop
+					problemEvents = eventsAbove[eventsAbove.index(r[0]):]
+					return problemEvents
+				else:
+					newEventsAbove = eventsAbove + [r[0]]
+					result = self.findProblemStrat(r[0],relList,newEventsAbove)
+					if len(result) != 0:
+						return result
+		return []
 	
 	def chooseAgeModels(self):
 		### Choose random age models for events with multiple age models
@@ -979,7 +1013,7 @@ class mainWindow(QtWidgets.QWidget):
 				self.progressWin.btn.clicked.connect(self.results)
 				
 			else:
-				self.lblSubmit.setText('VEAM had an error!')
+				self.lblSubmit.setText('VEAM had an error! Check console for info')
 				self.progressWin.close()
 	
 	def saveCfg(self):
