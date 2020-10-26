@@ -8,47 +8,21 @@ Created on Tue Jul 18 16:42:04 2017
 VEAM is a VOLCANIC EVENT AGE MODELER
 """
 
-import sys, os, operator
+import sys
 from PyQt5 import QtWidgets, QtCore, QtGui
-import numpy as np
+from numpy import genfromtxt
 
 ### VEAM Variables and Structures ###
 
 class Event():
 	def __init__(self):
 		self.id = ''
-		self.ageModel    = [] # list of modeled ages
-		self.uncertModel = [] # list of associated uncertainties
-		self.veamAges    = [] # VEAM-simulated ages
-		self.polarity    = None #Normal='N', Reverse='R'?
 		self.stratAbove  = [] # ids of events that are immediately stratigraphically above
 		self.stratBelow  = [] # ids of events that are immediately stratigraphically lower
 		self.allAbove    = [] # ids of events indirectly above this event
 		self.allBelow    = [] # ids of events indirectly below this event
 		self.allAboveInd = [] # event library indices of allAbove
 		self.allBelowInd = [] # event library indices of allBelow
-		self.totalRels   = 0  # total number of stratigraphic relationships
-		self.modelChoice = 0  # Which age model is being used in case of multiple models
-		self.sortOrder   = 0  # Where is this event in line to be dated in VEAM?
-		
-	def addAgeModel(self, time, uncertainty):
-		self.ageModel.append(float(time))
-		self.uncertModel.append(float(uncertainty))
-	
-	def checkStratRels(self):
-		#This is a naive check to see if there is a direct contridiction in the
-		#Stratigraphy database.
-		for rel in self.stratBelow:
-			if rel in self.stratAbove:
-				return False #if a strat relationship is in both upper and lower lists, that's an error
-		return True #these lists are ok.
-		
-	def calcTotalRelCount(self):
-		self.totalRels = len(self.stratAbove) + len(self.stratBelow)
-	
-	def chooseAgeModel(self):
-		if len(self.ageModel) > 1:
-			self.modelChoice = np.random.randint(len(self.ageModel))
 	
 class eventLibrary():
 	def __init__(self):
@@ -66,11 +40,6 @@ class eventLibrary():
 		# Stratigraphic Relationships in StratDB file.
 		#   If valid, return True, else return False
 		for e in self.events:
-			'''
-			check = e.checkStratRels()
-			if check == False:
-				return False
-			'''
 			eID = e.id
 			#print("Interrogating event:", eID)
 			errorFlag = self.findProblemStrat(eID, relList, [eID]) 
@@ -83,8 +52,7 @@ class eventLibrary():
 		return True
 	
 	def findProblemStrat(self,curEvent,relList,eventsAbove):
-		#This is similar to getEventsBelow, but specifically finds problematic 
-		#Contridictions in the Stratigraphy Web.
+		#finds problematic Contridictions in the Stratigraphy Web.
 		for r in relList:
 			if curEvent == r[1]: #If the current event is in the upper position
 				#print(r[0],r[1])
@@ -100,43 +68,7 @@ class eventLibrary():
 					if len(result) != 0:
 						return result
 		return []
-			
-	def getEventsAbove(self, eID, maxAbove):
-		### Recursively finds all events above an event and makes a temporary list of their ids
-		# maxAbove should be the number of relationships in the strat DB
-		# tempEList should start empty
-		if len(self.tempEList) >= maxAbove:
-			sys.stderr.write('Infinite Loop somewhere in strat relationships (going up)\n')
-			return -1
-		for event in self.events:
-			if event.id == eID:   #Find event ID
-				if len(event.stratAbove) > 0:
-					for higher in event.stratAbove: #for all event ids in stratAbove
-						self.tempEList.append(higher)  #append the eID to the temporary list
-						ret = self.getEventsAbove(higher, maxAbove)    #RECURSIVE GET EVENTS ABOVE
-						if ret == -1:
-							return -1
-				break
-		return 0 #return when no longer recurring
-			
-	def getEventsBelow(self, eID, maxBelow):
-		### Recursively finds all events below an event and makes a temporary list of their ids
-		# maxAbove should be the number of relationships in the strat DB
-		# tempEList should start empty
-		if len(self.tempEList) >= maxBelow:
-			sys.stderr.write('Infinite Loop somewhere in strat relationships (going down)\n')
-			return -1
-		for event in self.events:
-			if event.id == eID:   #Find event ID
-				if len(event.stratBelow) > 0:
-					for lower in event.stratBelow: #for all event ids in stratAbove
-						self.tempEList.append(lower)  #append the eID to the temporary list
-						ret = self.getEventsBelow(lower, maxBelow)    #RECURSIVE GET EVENTS BELOW
-						if ret == -1:
-							return -1
-				break
-		return 0 #return when no longer recurring
-			
+
 ### GUI WINDOW ###
 class mainWindow(QtWidgets.QWidget):
 	
@@ -315,6 +247,67 @@ class mainWindow(QtWidgets.QWidget):
 		self.bRemoveLower.clicked.connect(lambda: self.moveEvent('removeLower'))
 		
 		self.show()
+
+	
+	def loadEvents(self,filename='unassigned',cols=1):
+		### Clear previous work
+		self.cbxCurEvent.clear()
+		self.cbxCurEvent.addItem('Choose an event...')
+		self.listHigher.setStyleSheet('QListWidget {background-color: #eee;}')
+		self.listLower.setStyleSheet('QListWidget {background-color: #eee;}')
+		self.listUnassigned.setStyleSheet('QListWidget {background-color: white;}')
+		self.listUnassigned.clear()
+		self.listHigher.clear()
+		self.listLower.clear()
+		
+		### Open File if filename not alread assigned
+		if filename==False:
+			filename = QtWidgets.QFileDialog.getOpenFileName(self, 'Database File Path')
+		
+		#load ages database using genfromtxt
+		#VEAM dates volcanic events using the age database, so all events will
+		#be in this file already
+		try:
+			events = genfromtxt(filename[0], skip_header=1,delimiter=',', dtype='unicode')
+		except ValueError:
+			sys.stderr.write('\n ERROR: Check for extra spaces, commas in the names of events in %s and try again\n' % filename)
+			return -1, None
+		except OSError:
+			return 0
+		
+		#Reset Event Library
+		self.eventLib = eventLibrary()
+		eventIDs = []
+		
+		# Add events to event library
+		for i,entry in enumerate(events):
+			for col in range(cols):
+				exist = 0
+				idname = entry[col].strip()
+				
+				if len(self.eventLib.events) > 0:
+					for e in self.eventLib.events:
+						if e.id==idname: #if event already exists, just add the new age model
+							exist = 1
+							break
+				if exist == 0: #if this is a new event
+					self.eventLib.addEvent(idname)
+					eventIDs.append(idname)
+				
+		### Add units to unnassigned column
+		self.listUnassigned.addItems(sorted(eventIDs,key=str.casefold))
+		self.cbxCurEvent.addItems(sorted(eventIDs,key=str.casefold))
+			
+		self.updateListCts()
+		self.makeRelList()
+		self.lblWarn.setText(str(len(eventIDs))+' Events Loaded!')
+		sys.stdout.write('Loaded Event List from file:\n  '+filename[0])
+		sys.stdout.write('\nEvent List has '+str(len(eventIDs))+' events.\n\n')
+		
+		#Let a user clear everything and reset the Just Saved Flag since there should be no relationships
+		self.bClearAll.setDisabled(False)
+		self.justSaved = True		
+
 	
 	def loadStratFile(self):
 		### Open File
@@ -326,7 +319,7 @@ class mainWindow(QtWidgets.QWidget):
 		
 		#Load relationships from file
 		try:
-			relationships = np.genfromtxt(filename[0], skip_header=1,delimiter=',', dtype='unicode')
+			relationships = genfromtxt(filename[0], skip_header=1,delimiter=',', dtype='unicode')
 		except ValueError:
 			sys.stderr.write('\n ERROR: Check for extra spaces, commas in the names of events in %s and try again\n' % filename)
 			return -1, None
@@ -376,8 +369,7 @@ class mainWindow(QtWidgets.QWidget):
 		
 		self.makeRelList()
 		self.checkRelList()
-			
-		
+				
 		
 	def clearAll(self):
 		if self.justSaved == False:
@@ -402,8 +394,7 @@ class mainWindow(QtWidgets.QWidget):
 		self.makeRelList()
 		self.lblWarn.setText('All Cleared')
 		self.bClearAll.setDisabled(True)
-		
-		
+			
 	
 	def clearRels(self):
 		if self.justSaved == False:
@@ -455,143 +446,8 @@ class mainWindow(QtWidgets.QWidget):
 		
 		self.justSaved = True
 		return 0
-		
-	def getRelsForCurEvent(self):
-		curEvent = self.cbxCurEvent.currentText()
-		unassignedRels = []
-		higherRels = []
-		lowerRels = []
-		
-		for e in self.eventLib.events:
-			unassignedRels.append(e.id)
-		
-		try:
-			unassignedRels.remove(curEvent)
-		
-			for rel in self.relList:
-				#if curEvent is lower, add other to higher list
-				if curEvent == rel[0]:
-					higherRels.append(rel[1])
-					unassignedRels.remove(rel[1])
-				#if curEvent is higher, add other to lower list
-				elif curEvent == rel[1]:
-					lowerRels.append(rel[0])
-					unassignedRels.remove(rel[0])
-		except ValueError:
-			#Nothing to do, this means that current event is "choose an event"
-			something = 0
-				
-		#Update GUI Lists
-		self.listUnassigned.clear()
-		self.listHigher.clear()
-		self.listLower.clear()
-		
-		self.listUnassigned.addItems(sorted(unassignedRels,key=str.casefold))
-		self.listHigher.addItems(sorted(higherRels,key=str.casefold))
-		self.listLower.addItems(sorted(lowerRels,key=str.casefold))
-		
-		
-	def selectCurEvent(self):
-		self.lblWarn.setText('')
-		#print(self.oldindex,'->',self.cbxCurEvent.currentIndex())
-		#Add the old event back to the unassigned list if it's not "choose an event"
-		#if self.oldindex > 0:
-			#oldEventID = self.cbxCurEvent.itemText(self.oldindex)
-			#self.listUnassigned.addItem(oldEventID)
-			#self.listUnassigned.sortItems()
-		self.getRelsForCurEvent()
-		
-		#If event is "choose an event..." gray stuff out and move all things back	
-		if self.cbxCurEvent.currentIndex() <= 0:
-			self.listHigher.selectAll()
-			self.moveEvent('removeHigher')
-			self.listLower.selectAll()
-			self.moveEvent('removeLower')
-			self.listHigher.setDisabled(True)
-			self.listLower.setDisabled(True)
-			self.listHigher.setStyleSheet('QListWidget {background-color: #eee;}')
-			self.listLower.setStyleSheet('QListWidget {background-color: #eee;}')
-			self.bAddHigher.setDisabled(True)
-			self.bRemoveHigher.setDisabled(True)
-			self.bAddLower.setDisabled(True)
-			self.bRemoveLower.setDisabled(True)
-		else:
-			### Enable Users to work in workspace
-			self.listHigher.setDisabled(False)
-			self.listLower.setDisabled(False)
-			self.listHigher.setStyleSheet('QListWidget {background-color: white;}')
-			self.listLower.setStyleSheet('QListWidget {background-color: white;}')
-			self.bAddHigher.setDisabled(False)
-			self.bRemoveHigher.setDisabled(False)
-			self.bAddLower.setDisabled(False)
-			self.bRemoveLower.setDisabled(False)
-			
-			self.checkRelList()
-			
-		self.oldindex = self.cbxCurEvent.currentIndex()
-		### Remove current event from unassigned list
-		self.updateListCts()
-		
-		
-	def loadEvents(self,filename='unassigned',cols=1):
-		### Clear previous work
-		self.cbxCurEvent.clear()
-		self.cbxCurEvent.addItem('Choose an event...')
-		self.listHigher.setStyleSheet('QListWidget {background-color: #eee;}')
-		self.listLower.setStyleSheet('QListWidget {background-color: #eee;}')
-		self.listUnassigned.setStyleSheet('QListWidget {background-color: white;}')
-		self.listUnassigned.clear()
-		self.listHigher.clear()
-		self.listLower.clear()
-		
-		### Open File if filename not alread assigned
-		if filename==False:
-			filename = QtWidgets.QFileDialog.getOpenFileName(self, 'Database File Path')
-		
-		#load ages database using genfromtxt
-		#VEAM dates volcanic events using the age database, so all events will
-		#be in this file already
-		try:
-			events = np.genfromtxt(filename[0], skip_header=1,delimiter=',', dtype='unicode')
-		except ValueError:
-			sys.stderr.write('\n ERROR: Check for extra spaces, commas in the names of events in %s and try again\n' % filename)
-			return -1, None
-		except OSError:
-			return 0
-		
-		#Reset Event Library
-		self.eventLib = eventLibrary()
-		eventIDs = []
-		
-		# Add events to event library
-		for i,entry in enumerate(events):
-			for col in range(cols):
-				exist = 0
-				idname = entry[col].strip()
-				
-				if len(self.eventLib.events) > 0:
-					for e in self.eventLib.events:
-						if e.id==idname: #if event already exists, just add the new age model
-							exist = 1
-							break
-				if exist == 0: #if this is a new event
-					self.eventLib.addEvent(idname)
-					eventIDs.append(idname)
-				
-		### Add units to unnassigned column
-		self.listUnassigned.addItems(sorted(eventIDs,key=str.casefold))
-		self.cbxCurEvent.addItems(sorted(eventIDs,key=str.casefold))
-			
-		self.updateListCts()
-		self.makeRelList()
-		self.lblWarn.setText(str(len(eventIDs))+' Events Loaded!')
-		sys.stdout.write('Loaded Event List from file:\n  '+filename[0])
-		sys.stdout.write('\nEvent List has '+str(len(eventIDs))+' events.\n\n')
-		
-		#Let a user clear everything and reset the Just Saved Flag since there should be no relationships
-		self.bClearAll.setDisabled(False)
-		self.justSaved = True		
-	
+
+
 	def moveEvent(self,direction):
 		### Remove Lower to Unassigned
 		if direction=='removeLower':
@@ -674,8 +530,7 @@ class mainWindow(QtWidgets.QWidget):
 		#Change the Just Saved Flag
 		self.justSaved = False
 		
-		
-		
+			
 	def addNewRelationship(self,lowerID,higherID):
 		#Add Stratigraphic Relationships to Events
 		#event.stratAbove and stratBelow
@@ -694,6 +549,7 @@ class mainWindow(QtWidgets.QWidget):
 				return 0
 			
 		return -1
+
 	
 	def removeRelationship(self,lowerID,higherID):
 		#Add Stratigraphic Relationships to Events
@@ -713,65 +569,7 @@ class mainWindow(QtWidgets.QWidget):
 				return 0
 			
 		return -1
-	
-	def checkRelList(self):
-		self.listUnassigned.setStyleSheet('QListWidget {background-color: white;}')
-		self.listLower.setStyleSheet('QListWidget {background-color: white;}')
-		self.listHigher.setStyleSheet('QListWidget {background-color: white;}')
-		self.listUnassigned.repaint()
-		self.listLower.repaint()
-		self.listHigher.repaint()
-		
-		relListError = self.eventLib.checkAllStrat(self.relList)
-		if len(relListError): 
-			#Print out if the error is new
-			if self.stratErrorList != relListError:
-				sys.stderr.write("\n\nERROR: There is a stratigraphic loop with\n these vents:\n")
-				for event in relListError:
-					sys.stderr.write("  - "+event+"\n")
-				self.lblWarn.setText('Relationship Loop Error!')
-				self.stratErrorList = relListError
-			
-			#Find all bad events and paint magenta
-			for badEvent in relListError:
-				#Find bad entries in all lists
-				bEIdx = self.listUnassigned.findItems(badEvent,QtCore.Qt.MatchExactly)
-				if len(bEIdx) > 0:
-					for B in bEIdx:
-						row = self.listUnassigned.row(B)
-						self.listUnassigned.item(row).setBackground(QtCore.Qt.magenta)
-				bEIdx = self.listHigher.findItems(badEvent,QtCore.Qt.MatchExactly)
-				if len(bEIdx) > 0:
-					for B in bEIdx:
-						row = self.listHigher.row(B)
-						self.listHigher.item(row).setBackground(QtCore.Qt.magenta)
-				bEIdx = self.listLower.findItems(badEvent,QtCore.Qt.MatchExactly)
-				if len(bEIdx) > 0:
-					for B in bEIdx:
-						row = self.listLower.row(B)
-						self.listLower.item(row).setBackground(QtCore.Qt.magenta)
-				
-				#Search for bad relationships in the strat relationship dropdown.
-				for otherBadEvent in relListError:
-					#We don't know which is older or younger, so just make two and search.
-					badstring1 = str(badEvent+', '+otherBadEvent)
-					badstring2 = str(otherBadEvent+', '+badEvent)
-					bEIdx = self.cbxRelList.findText(badstring1)
-					if bEIdx > 0:
-						self.cbxRelList.model().item(bEIdx).setBackground(QtCore.Qt.magenta)
-					else:
-						bEIdx = self.cbxRelList.findText(badstring2)
-						if bEIdx > 0:
-							self.cbxRelList.model().item(bEIdx).setBackground(QtCore.Qt.magenta)
-					
-		else:
-			#No Errors! Repaint white
-			self.getRelsForCurEvent()
-			if len(self.stratErrorList) > 0:
-				sys.stderr.write("\nStratigraphic Error Resolved!\n")
-				self.lblWarn.setText('')
-				self.stratErrorList = []
-			
+
 	
 	def makeRelList(self):
 		#Make a 2xN array of all "Strat Below" relationships
@@ -815,6 +613,69 @@ class mainWindow(QtWidgets.QWidget):
 		self.cbxRelList.repaint()
 		return 0
 	
+	
+	def checkRelList(self):
+		self.listUnassigned.setStyleSheet('QListWidget {background-color: white;}')
+		self.listLower.setStyleSheet('QListWidget {background-color: white;}')
+		self.listHigher.setStyleSheet('QListWidget {background-color: white;}')
+		self.listUnassigned.repaint()
+		self.listLower.repaint()
+		self.listHigher.repaint()
+		
+		relListError = self.eventLib.checkAllStrat(self.relList)
+		if len(relListError): 
+			#Print out if the error is new
+			if self.stratErrorList != relListError:
+				sys.stderr.write("\n\nERROR: There is a stratigraphic loop with\n these vents:\n")
+				for event in relListError:
+					sys.stderr.write("  - "+event+"\n")
+				self.lblWarn.setText('Relationship Loop Error!')
+				self.stratErrorList = relListError
+			
+			#Paint everything white before things get painted magenta
+			self.getRelsForCurEvent()
+			
+			#Find all bad events and paint magenta
+			for badEvent in relListError:
+				#Find bad entries in all lists
+				bEIdx = self.listUnassigned.findItems(badEvent,QtCore.Qt.MatchExactly)
+				if len(bEIdx) > 0:
+					for B in bEIdx:
+						row = self.listUnassigned.row(B)
+						self.listUnassigned.item(row).setBackground(QtCore.Qt.magenta)
+				bEIdx = self.listHigher.findItems(badEvent,QtCore.Qt.MatchExactly)
+				if len(bEIdx) > 0:
+					for B in bEIdx:
+						row = self.listHigher.row(B)
+						self.listHigher.item(row).setBackground(QtCore.Qt.magenta)
+				bEIdx = self.listLower.findItems(badEvent,QtCore.Qt.MatchExactly)
+				if len(bEIdx) > 0:
+					for B in bEIdx:
+						row = self.listLower.row(B)
+						self.listLower.item(row).setBackground(QtCore.Qt.magenta)
+				
+				#Search for bad relationships in the strat relationship dropdown.
+				for otherBadEvent in relListError:
+					#We don't know which is older or younger, so just make two and search.
+					badstring1 = str(badEvent+', '+otherBadEvent)
+					badstring2 = str(otherBadEvent+', '+badEvent)
+					bEIdx = self.cbxRelList.findText(badstring1)
+					if bEIdx > 0:
+						self.cbxRelList.model().item(bEIdx).setBackground(QtCore.Qt.magenta)
+					else:
+						bEIdx = self.cbxRelList.findText(badstring2)
+						if bEIdx > 0:
+							self.cbxRelList.model().item(bEIdx).setBackground(QtCore.Qt.magenta)
+					
+		else:
+			#No Errors! Repaint white
+			self.getRelsForCurEvent()
+			if len(self.stratErrorList) > 0:
+				sys.stderr.write("\nStratigraphic Error Resolved!\n")
+				self.lblWarn.setText('')
+				self.stratErrorList = []
+			
+	
 	def updateListCts(self):
 		if self.listHigher.count():
 			self.lblHigherCt.setText(str(self.listHigher.count()))
@@ -834,7 +695,84 @@ class mainWindow(QtWidgets.QWidget):
 		self.lblUnassignedCt.repaint()
 		self.lblHigherCt.repaint()
 		self.lblLowerCt.repaint()
+		
+		
+	def selectCurEvent(self):
+		self.lblWarn.setText('')
+		#print(self.oldindex,'->',self.cbxCurEvent.currentIndex())
+		#Add the old event back to the unassigned list if it's not "choose an event"
+		#if self.oldindex > 0:
+			#oldEventID = self.cbxCurEvent.itemText(self.oldindex)
+			#self.listUnassigned.addItem(oldEventID)
+			#self.listUnassigned.sortItems()
+		self.getRelsForCurEvent()
+		
+		#If event is "choose an event..." gray stuff out and move all things back	
+		if self.cbxCurEvent.currentIndex() <= 0:
+			self.listHigher.selectAll()
+			self.moveEvent('removeHigher')
+			self.listLower.selectAll()
+			self.moveEvent('removeLower')
+			self.listHigher.setDisabled(True)
+			self.listLower.setDisabled(True)
+			self.listHigher.setStyleSheet('QListWidget {background-color: #eee;}')
+			self.listLower.setStyleSheet('QListWidget {background-color: #eee;}')
+			self.bAddHigher.setDisabled(True)
+			self.bRemoveHigher.setDisabled(True)
+			self.bAddLower.setDisabled(True)
+			self.bRemoveLower.setDisabled(True)
+		else:
+			### Enable Users to work in workspace
+			self.listHigher.setDisabled(False)
+			self.listLower.setDisabled(False)
+			self.listHigher.setStyleSheet('QListWidget {background-color: white;}')
+			self.listLower.setStyleSheet('QListWidget {background-color: white;}')
+			self.bAddHigher.setDisabled(False)
+			self.bRemoveHigher.setDisabled(False)
+			self.bAddLower.setDisabled(False)
+			self.bRemoveLower.setDisabled(False)
+			
+			self.checkRelList()
+			
+		self.oldindex = self.cbxCurEvent.currentIndex()
+		# Remove current event from unassigned list
+		self.updateListCts()
 	
+	
+	def getRelsForCurEvent(self):
+		curEvent = self.cbxCurEvent.currentText()
+		unassignedRels = []
+		higherRels = []
+		lowerRels = []
+		
+		for e in self.eventLib.events:
+			unassignedRels.append(e.id)
+		
+		try:
+			unassignedRels.remove(curEvent)
+		
+			for rel in self.relList:
+				#if curEvent is lower, add other to higher list
+				if curEvent == rel[0]:
+					higherRels.append(rel[1])
+					unassignedRels.remove(rel[1])
+				#if curEvent is higher, add other to lower list
+				elif curEvent == rel[1]:
+					lowerRels.append(rel[0])
+					unassignedRels.remove(rel[0])
+		except ValueError:
+			#Nothing to do, this means that current event is "choose an event"
+			something = 0
+				
+		#Update GUI Lists
+		self.listUnassigned.clear()
+		self.listHigher.clear()
+		self.listLower.clear()
+		
+		self.listUnassigned.addItems(sorted(unassignedRels,key=str.casefold))
+		self.listHigher.addItems(sorted(higherRels,key=str.casefold))
+		self.listLower.addItems(sorted(lowerRels,key=str.casefold))
+		
 
 def main():
 	### Define QT App Instance
