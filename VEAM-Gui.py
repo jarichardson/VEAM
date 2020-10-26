@@ -778,7 +778,7 @@ class mainWindow(QtWidgets.QWidget):
 		### The Banner Logo for VEAM
 		banner = QtWidgets.QHBoxLayout()
 		self.bannerLabel = QtWidgets.QLabel()
-		self.bannerLabel.setPixmap(QtGui.QPixmap('greeley_cone_banner_300dpi.png').scaled(600,
+		self.bannerLabel.setPixmap(QtGui.QPixmap('greeley_cone_banner_600px.png').scaled(600,
 																													600, QtCore.Qt.KeepAspectRatio))
 		banner.addStretch()
 		banner.addWidget(self.bannerLabel)
