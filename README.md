@@ -9,7 +9,7 @@ The *Volcanic Event Age Model* runs a Monte Carlo method to model cumulative vol
 **VEAM.py** - Volcanic Event Age Model command line script developed by J Wilson. See MS Thesis at:
 https://scholarcommons.usf.edu/etd/6435/
 
-##### Python Dependencies
+#### Python Dependencies
  - Numpy
  - Scipy
  - matplotlib
@@ -33,6 +33,7 @@ VEAM Stratigraphy Tool runthrough: https://youtu.be/S13zHnA55fQ
 
 ## CITATIONS
 If VEAM is helpful to you, please cite:
+
 Richardson, J. A., Wilson, J. A., Connor, C. B., Bleacher, J. E., & Kiyosugi, K. (2017). Recurrence rate and magma effusion rate for the latest volcanism on Arsia Mons, Mars. Earth and Planetary Science Letters, 458, 170-178. https://doi.org/10.1016/j.epsl.2016.10.040
 
 Wilson, J. A., "A New Volcanic Event Recurrence Rate Model and Code For Estimating Uncertainty in Recurrence Rate and Volume Flux Through Time With Selected Examples" (2016). Graduate Theses and Dissertations. https://scholarcommons.usf.edu/etd/6435
