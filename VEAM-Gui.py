@@ -25,6 +25,7 @@ def load_databases(strat_db_file, ages_db_file):
 	#load age database using genfromtxt into 2xN string matrix
 	try:
 		relationships = np.genfromtxt(strat_db_file,skip_header=1,delimiter=',',dtype='unicode')
+		relationships = [[e.strip() for e in rel] for rel in relationships]
 	except ValueError:
 		sys.stderr.write('\n ERROR: Check for extra spaces, commas in the relationships in %s and try again\n' % ages_db_file)
 		return -1, None
@@ -60,28 +61,28 @@ def load_databases(strat_db_file, ages_db_file):
 	
 	sys.stdout.write('      Loaded all Events from Ages Database successfully!\n')
 	
-	
-	
 	#Add Stratigraphic Relationships to Events
 	for link in relationships:
+		lowerID = link[0]
+		higherID = link[1]
 		#The lower event is link[0], the higher event is link[1]
 		#event.stratAbove and stratBelow
 		both = 0
 		for event in eventLib.events:
 			#if the event is the lower event, append the higher event to stratAbove
-			if event.id == link[0]:
-				event.stratAbove.append(link[1])
+			if event.id == lowerID:
+				event.stratAbove.append(higherID)
 				both += 2
 			#if the event is the higher event, append the higher event to stratBelow
-			elif event.id == link[1]:
-				event.stratBelow.append(link[0])
+			elif event.id == higherID:
+				event.stratBelow.append(lowerID)
 				both += 1
 			#If both events have been found, go to next relationship
 			if both == 3:
 				break
 		if both == 0:#if both still = 0, neither event found
 			sys.stderr.write('Events \'%s\' and \'%s\' in stratigraphic database not found in Age database!\n' %
-																				(link[0],link[1]))
+																				(lowerID,higherID))
 			return -1, None
 		elif both != 3: #if both still = 1, lower event not found, if = 2, higher event not found
 			sys.stderr.write('Event \'%s\' in Stratigraphic database not found in Age database!\n' % 

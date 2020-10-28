@@ -2,10 +2,11 @@
 
 # -*- coding: utf-8 -*-
 """
-Created on Tue Jul 18 16:42:04 2017
-@author: James Wilson, Jacob Richardson
+Created on October 25, 2020
+@author: Jacob Richardson
 
 VEAM is a VOLCANIC EVENT AGE MODELER
+This is the VEAM Stratigraphy Tool
 """
 
 import sys
@@ -626,7 +627,7 @@ class mainWindow(QtWidgets.QWidget):
 		if len(relListError): 
 			#Print out if the error is new
 			if self.stratErrorList != relListError:
-				sys.stderr.write("\n\nERROR: There is a stratigraphic loop with\n these vents:\n")
+				sys.stderr.write("\n\nERROR: There is a stratigraphic loop with\n these events:\n")
 				for event in relListError:
 					sys.stderr.write("  - "+event+"\n")
 				self.lblWarn.setText('Relationship Loop Error!')
