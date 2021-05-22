@@ -94,7 +94,7 @@ def load_databases(strat_db_file, ages_db_file):
 	check = eventLib.checkAllStrat(relationships)
 	if check == -1:
 			return -1, None
-	check = eventLib.getFullStratLists(len(relationships))
+	check = eventLib.getFullStratLists() #len(relationships))
 	if check == -1:
 			return -1, None
 	sys.stdout.write('Loaded all Relationships in Stratigraphy Database successfully!\n')
@@ -142,49 +142,53 @@ def sample_ages(eventsLib):
 		mu    = event.ageModel[event.modelChoice]
 		sigma = event.uncertModel[event.modelChoice]
 		
+		if mu == -9999:
+			event.veamAges[-1] = np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
+			continue
+		
 		if sigma == 0: # If the date is historic or exact...
 			event.veamAges[-1] = mu
 			continue
 
-		if sigma != 0:
-			if mu == -9999:
+		if sigma > 0:
+			# Convert minage and maxage to standard normal range because a, b are the standard deviations
+			a = (AcceptableAge_MIN - mu) / sigma
+			b = (AcceptableAge_MAX - mu) / sigma
+			
+			#Use Random Uniform if the area is very narrow. 
+			#This is because of likelihood of bad result with truncnorm
+			if (b-a) < 0.1:
+				np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
+			
+			# Use truncated normal distribution to sample age, make sure it is greater than zero
+			event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+			
+			breakpt = 0 #break after 10
+			if event.veamAges[-1] <=0:
+				while ((event.veamAges[-1] <= 0) and (breakpt < 10)):
+					event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+					breakpt += 1
+			if np.isinf(event.veamAges[-1]):
+				while ((np.isinf(event.veamAges[-1])) and (breakpt < 10)):
+					event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
+					breakpt += 1
+			
+			#If the sample is too far along the tail, just throw the age model out!
+			# and choose from a random uniform.
+			if breakpt == 10:
 				event.veamAges[-1] = np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
-				continue
-			else:
-				# Convert minage and maxage to standard normal range because a, b are the standard deviations
-				a = (AcceptableAge_MIN - mu) / sigma
-				b = (AcceptableAge_MAX - mu) / sigma
 				
-				#Use Random Uniform if the area is very narrow. 
-				#This is because of likelihood of bad result with truncnorm
-				if (b-a) < 0.1:
-					np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
-				
-				# Use truncated normal distribution to sample age, make sure it is greater than zero
-				event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
-				breakpt = 0 #break after 10
-				if event.veamAges[-1] <=0:
-					while ((event.veamAges[-1] <= 0) and (breakpt < 10)):
-						event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
-						breakpt += 1
-				if np.isinf(event.veamAges[-1]):
-					while ((np.isinf(event.veamAges[-1])) and (breakpt < 10)):
-						event.veamAges[-1] = truncnorm.rvs(a, b, loc=mu, scale=sigma)
-						breakpt += 1
-				
-				#If the sample is too far along the tail, just throw the age model out!
-				# and choose from a random uniform.
-				if breakpt == 10:
-					event.veamAges[-1] = np.random.uniform(AcceptableAge_MAX, AcceptableAge_MIN)
+			if event.veamAges[-1] < AcceptableAge_MIN:
+				sys.stderr.write('This might be a minage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+				return -1
 
-				#Appen
-				if event.veamAges[-1] < AcceptableAge_MIN:
-					sys.stderr.write('This might be a minage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-					return -1
-
-				if event.veamAges[-1] > AcceptableAge_MAX:
-					sys.stderr.write('This might be a maxage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
-					return -1
+			if event.veamAges[-1] > AcceptableAge_MAX:
+				sys.stderr.write('This might be a maxage issue!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
+				return -1
+		else: 
+			sys.stderr.write('Error: An age was given for %s, but its uncertainty is negative.' % (event.id))
+			return -1
+			
 
 	return 0
 
@@ -243,7 +247,7 @@ def veam_main(inputs, VEAMWin):
 		ret = sample_ages(field)
 		if ret != 0:
 			sys.stdout.write('\nError in dating events!\n')
-			return -1
+			return -1, None
 		
 		VEAMWin.veamProgress = int(((sim+1)*100.0)/numruns)
 		
@@ -352,20 +356,23 @@ class eventLibrary():
 		for e in self.events:
 			e.chooseAgeModel()
 			
-	def getFullStratLists(self, maxStratRels):
+	def getFullStratLists(self):
 		### Find all events above and below each event.
-		# MaxStratRels should be the number of relationships in the strat DB
+		# Previous version had a MaxStratRels as a proxy for infinite loops. 
+		# This has been removed and now there is an actual infinite loop
+		# checker run before this (checkAllStrat)
+		
 		for event in self.events:
 			#Find events above current event
 			self.tempEList = []
-			ret = self.getEventsAbove(event.id, maxStratRels)
+			ret = self.getEventsAbove(event.id)
 			if ret != 0:
 				sys.stderr.write('Error in getEventsAbove\n')
 				return -1
 			event.allAbove = sorted(set(self.tempEList)) #Store unique values in allAbove
 			#Find events below current event
 			self.tempEList = []
-			ret = self.getEventsBelow(event.id, maxStratRels)
+			ret = self.getEventsBelow(event.id)
 			if ret != 0:
 				sys.stderr.write('Error in getEventsBelow\n')
 				return -1
@@ -373,39 +380,33 @@ class eventLibrary():
 		return 0
 		
 			
-	def getEventsAbove(self, eID, maxAbove):
+	def getEventsAbove(self, eID):
 		### Recursively finds all events above an event and makes a temporary list of their ids
-		# maxAbove should be the number of relationships in the strat DB
+		# Previous version had a maxAbove as a proxy for infinite loops. 
+		# This has been removed and now there is an actual infinite loop
+		# checker run before this (checkAllStrat)
 		# tempEList should start empty
-		if len(self.tempEList) >= maxAbove:
-			sys.stderr.write('Infinite Loop somewhere in strat relationships (going up)\n')
-			return -1
 		for event in self.events:
 			if event.id == eID:   #Find event ID
 				if len(event.stratAbove) > 0:
 					for higher in event.stratAbove: #for all event ids in stratAbove
 						self.tempEList.append(higher)  #append the eID to the temporary list
-						ret = self.getEventsAbove(higher, maxAbove)    #RECURSIVE GET EVENTS ABOVE
-						if ret == -1:
-							return -1
+						self.getEventsAbove(higher)    #RECURSIVE GET EVENTS ABOVE
 				break
 		return 0 #return when no longer recurring
 			
-	def getEventsBelow(self, eID, maxBelow):
+	def getEventsBelow(self, eID):
 		### Recursively finds all events below an event and makes a temporary list of their ids
-		# maxAbove should be the number of relationships in the strat DB
+		# Previous version had a MaxBelow as a proxy for infinite loops. 
+		# This has been removed and now there is an actual infinite loop
+		# checker run before this (checkAllStrat)
 		# tempEList should start empty
-		if len(self.tempEList) >= maxBelow:
-			sys.stderr.write('Infinite Loop somewhere in strat relationships (going down)\n')
-			return -1
 		for event in self.events:
 			if event.id == eID:   #Find event ID
 				if len(event.stratBelow) > 0:
 					for lower in event.stratBelow: #for all event ids in stratAbove
 						self.tempEList.append(lower)  #append the eID to the temporary list
-						ret = self.getEventsBelow(lower, maxBelow)    #RECURSIVE GET EVENTS BELOW
-						if ret == -1:
-							return -1
+						self.getEventsBelow(lower)    #RECURSIVE GET EVENTS BELOW
 				break
 		return 0 #return when no longer recurring
 	
