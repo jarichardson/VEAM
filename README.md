@@ -18,11 +18,12 @@ https://scholarcommons.usf.edu/etd/6435/
  - PyQt5
 
 #### Recent Updates
+ - NEW FEATURE: VEAM Stratigraphy Tool has a button to generate a list of ALL problematic stratigraphic relationships.
  - Updated VEAM-GUI.py to From Python 2.7 to Python 3.7
  - Added the VEAM Stratigraphy Tool
  - New supporting error messages when a stratigraphic issue is found in VEAM-GUI.py
- - Changed database file suffixes to *.csv
  - Fixed whitespace issue with loading events
+ - Fixed bug for VEAM loading very large/complex stratigraphic databases.
 
 ## SUPPLEMENTAL INFORMATION
 VEAM GUI runthrough, Part 1: https://youtu.be/ZKjCvC6EYFo
