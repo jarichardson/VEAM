@@ -9,8 +9,9 @@ VEAM is a VOLCANIC EVENT AGE MODELER
 This is the VEAM Stratigraphy Tool
 """
 
-import sys
+import sys, time
 from PyQt5 import QtWidgets, QtCore, QtGui
+import threading, queue
 from numpy import genfromtxt
 
 ### VEAM Variables and Structures ###
@@ -29,6 +30,9 @@ class eventLibrary():
 	def __init__(self):
 		self.events = []
 		self.tempEList = []
+		self.badRelList = []
+		self.loopList = []
+		self.ignoreBadRels = False
 
 	def addEvent(self,name):
 		### Create a new event
@@ -37,9 +41,16 @@ class eventLibrary():
 		self.events.append(e)
 		
 	def checkAllStrat(self,relList):
-		### Check Stratigraphy Web. Needs relationships, an Nx2 array of all 
-		# Stratigraphic Relationships in StratDB file.
-		#   If valid, return True, else return False
+		''' 
+		Check Stratigraphy Web. Needs relationships, an Nx2 array of all 
+		  Stratigraphic Relationships in StratDB file.
+		  If valid, return True, else return False
+		'''
+		
+		#set to false to always find the first problem, set to True to find more
+		#problem loops. Keep False in this method.
+		self.ignoreBadRels = False
+		
 		for e in self.events:
 			eID = e.id
 			#print("Interrogating event:", eID)
@@ -48,26 +59,94 @@ class eventLibrary():
 				return errorFlag
 		return []
 		
-		#make a deeper check
+	def checkAllStrat_MultSearch(self,relList, Window):
+		'''
+		Check Stratigraphy Web just like checkAllStrat, but continue checking
+		after a loop is found and only look at a given event.
+		This will hopefully replace checkAllStrat, but painting in the GUI
+		will have to be reworked and this is slow for large relationship tables
+		so this replacement is nontrivial.
+		'''
+		self.loopList = []
+		self.badRelList = []
+		#set to True to find more problem loops. Keep False in this method.
+		self.ignoreBadRels = True
 		
-		return True
+		eventCt = len(self.events)
+		
+		for i,e in enumerate(self.events):
+			eID = e.id
+			#Interrogate stratigraphic relationships for event e
+			eventsInLoop = self.findProblemStrat(eID, relList, [eID]) 
+			
+			#if there are infinite loops left, keep repeating findProblemStrat
+			#until there are no loops left
+			while len(eventsInLoop):
+				self.loopList.append(eventsInLoop)
+				eventsInLoop = self.findProblemStrat(eID, relList, [eID])
+				Window.loopsFound += 1
+				
+			Window.checkProgress = int(((i)*100.0)/eventCt)
+		
+		#if there's no issue, this will be an empty list. If there is an issue
+		#it will be a list of lists of events in stratigraphic loops
+		return self.loopList
 	
 	def findProblemStrat(self,curEvent,relList,eventsAbove):
-		#finds problematic Contridictions in the Stratigraphy Web.
-		for r in relList:
-			if curEvent == r[1]: #If the current event is in the upper position
+		'''
+		finds problematic contridictions in the Stratigraphy Web 
+		starting with a single event and recursively searching through all
+		related vents below it.
+		'''
+		
+		# Go through each relationship in the file, searching for moments where
+		# the current event is in the upper position. Then search down.
+		for rNum,r in enumerate(relList):
+			
+			
+			if self.ignoreBadRels == True:
+				#If this relationship was already caught as closing a loop
+				#just ignore it forever in this check - the bad loop (or at least one)
+				#was already caught.
+				if rNum in self.badRelList:
+					continue
+			
+			#Find relationships where the current event is in the upper position
+			if curEvent == r[1]:
 				#print(r[0],r[1])
 				#print ('event ', r[1], ' is above ', r[0])
+				
+				# If Error!
 				if r[0] in eventsAbove:
-					#THIS MEANS THERE IS AN ERROR and it was JUST FIRST CAUGHT NOW
+					#THIS MEANS THERE IS AN ERROR and it was JUST FIRST CAUGHT NOW.
+					
+					#The lower event in this relationship is already in the
+					#current stratigraphic chain.
+					
 					#Crop the eventsabove list to exclude events outside the loop
+					#Do this by taking events in the chain at and after the 
+					#first occurence of this lower event.
 					problemEvents = eventsAbove[eventsAbove.index(r[0]):]
+					#add the relationship that "closed the loop" to the bad list
+					if ~(rNum in self.badRelList):
+						self.badRelList.append(rNum)
+					
 					return problemEvents
+				
+				# If no error!
 				else:
+					#Add the lower event to the stratigraphic chain and then...
 					newEventsAbove = eventsAbove + [r[0]]
+					#recursively look for problems with this lower event
 					result = self.findProblemStrat(r[0],relList,newEventsAbove)
+					
+					#if a problem was found in the recursive search, it will
+					#now show up as an error. Stop everything and just return
+					#the error back. Like the end of Inception.
 					if len(result) != 0:
 						return result
+		
+		#If the search for errors came up empty, return [] to show it's good.
 		return []
 
 ### GUI WINDOW ###
@@ -103,9 +182,11 @@ class mainWindow(QtWidgets.QWidget):
 		self.bSaveStrat = QtWidgets.QPushButton('Save Stratigraphy Database')
 		self.bClearRels = QtWidgets.QPushButton('Clear All Relationships')
 		self.bClearAll = QtWidgets.QPushButton('Clear Everything')
+		self.bFullCheck = QtWidgets.QPushButton('Run a Full Check')
 		self.bClearAll.setStyleSheet('QPushButton {color: red;}')
 		self.bClearRels.setDisabled(True)
 		self.bClearAll.setDisabled(True)
+		self.bFullCheck.setDisabled(True)
 		
 		hLoadSave = QtWidgets.QHBoxLayout() #sims, geomag, strat use box
 		hLoadSave.addWidget(self.bLoadAges)
@@ -118,6 +199,7 @@ class mainWindow(QtWidgets.QWidget):
 		hClear.addWidget(self.bClearRels)
 		hClear.addWidget(self.bClearAll)
 		hClear.addStretch()
+		hClear.addWidget(self.bFullCheck)
 		
 		### Assigned Column
 		
@@ -239,6 +321,7 @@ class mainWindow(QtWidgets.QWidget):
 		self.bSaveStrat.clicked.connect(self.saveStratFile)
 		self.bClearRels.clicked.connect(self.clearRels)
 		self.bClearAll.clicked.connect(self.clearAll)
+		self.bFullCheck.clicked.connect(self.fullCheckRelList)
 		self.cbxCurEvent.currentIndexChanged.connect(self.selectCurEvent)
 		
 		#Arrow Button Actions
@@ -420,7 +503,7 @@ class mainWindow(QtWidgets.QWidget):
 		self.justSaved = True
 		self.lblWarn.setText('Relationships Cleared')
 		
-		
+	
 	def saveStratFile(self):
 		### Run a check function for the stratigraphy
 		self.checkRelList()
@@ -593,6 +676,7 @@ class mainWindow(QtWidgets.QWidget):
 		if len(self.relList) == 0:
 			self.cbxRelList.addItem('No Stratigraphic Relationships')
 			self.bClearRels.setDisabled(True)
+			self.bFullCheck.setDisabled(True)
 		elif len(self.relList) == 1:
 			self.cbxRelList.addItem('1 Stratigraphic Relationship')
 			self.cbxRelList.addItem('Lower, Upper')
@@ -601,6 +685,7 @@ class mainWindow(QtWidgets.QWidget):
 			
 			#Let people click the clear relationship button
 			self.bClearRels.setDisabled(False)
+			self.bFullCheck.setDisabled(False)
 		else:
 			self.cbxRelList.addItem(str(len(self.relList))+' Total Relationships')
 			self.cbxRelList.addItem('Lower, Upper')
@@ -610,12 +695,17 @@ class mainWindow(QtWidgets.QWidget):
 			
 			#Let people click the clear relationship button
 			self.bClearRels.setDisabled(False)
+			self.bFullCheck.setDisabled(False)
 		
 		self.cbxRelList.repaint()
 		return 0
 	
 	
 	def checkRelList(self):
+		'''
+		runs the command checkAllStrat and handles errors if they
+		exist.
+		'''
 		self.listUnassigned.setStyleSheet('QListWidget {background-color: white;}')
 		self.listLower.setStyleSheet('QListWidget {background-color: white;}')
 		self.listHigher.setStyleSheet('QListWidget {background-color: white;}')
@@ -623,7 +713,10 @@ class mainWindow(QtWidgets.QWidget):
 		self.listLower.repaint()
 		self.listHigher.repaint()
 		
+		### Actually check for errors in the stratigraphic relationships
 		relListError = self.eventLib.checkAllStrat(self.relList)
+		
+		### Error Handling
 		if len(relListError): 
 			#Print out if the error is new
 			if self.stratErrorList != relListError:
@@ -677,6 +770,81 @@ class mainWindow(QtWidgets.QWidget):
 				self.stratErrorList = []
 			
 	
+	def fullCheckRelList(self):
+		### Test the multiple problem finder
+		#fullrelListError = self.eventLib.checkAllStrat_MultSearch(self.relList)
+		#print(fullrelListError)
+		self.loopsFound = 0
+		
+		#Open the Progress Bar/Results window
+		self.checkRelsWindow = checkRelsWindow(parent=self)
+		self.checkRelsWindow.lblRels.setText('Checking All %d Relationships...'
+									    % len(self.relList))
+		
+		self.checkProgress = 0
+		#Create Thread with que as the return variable host for error handling
+		#This will allow this checker to be multithreaded if desired
+		que = queue.Queue()
+		thr = threading.Thread(target= lambda q, var, win: q.put(
+			self.eventLib.checkAllStrat_MultSearch(var, win)), 
+			args=(que, self.relList, self))
+		thr.start() # runs VEAM as Thread
+		
+		#During VEAM run, allow the windows to update and be used if needed
+		while thr.is_alive():
+			QtCore.QCoreApplication.processEvents()
+			self.checkRelsWindow.progress.setValue(self.checkProgress)
+			if self.loopsFound != 0:
+				self.checkRelsWindow.lblFoundLoops.setText('%d Issues Found' % self.loopsFound)
+			else:
+				self.checkRelsWindow.lblFoundLoops.setText('No Issues Found')
+			time.sleep(0.1)
+		
+		thr.join() # wait till the check is done
+		Loops = que.get() #Get the return from VEAM
+		
+		#self.btn.setEnabled(True)
+		self.checkRelsWindow.lblRels.setText('Check Complete!')
+		self.checkRelsWindow.progress.setValue(100)
+		self.checkRelsWindow.progress.setHidden(True)
+		self.checkRelsWindow.btnClose.setHidden(False)
+		self.checkRelsWindow.btnCopy.setHidden(False)
+		if len(Loops) == 0:
+			self.checkRelsWindow.lblFoundLoops.setText('No Issues Found')
+		else:
+			self.checkRelsWindow.btnCopy.setDisabled(False)
+			self.checkRelsWindow.lblFoundLoops.setText('%d Issues Found' % len(Loops))
+			self.checkRelsWindow.txtArea.setHidden(False)
+			strLoopList = ''
+			for loop in Loops:
+				for j,e in enumerate(loop):
+					if j>0:
+						strLoopList += (', %s' % e)
+					else: 
+						strLoopList += ('%s' % e)
+				strLoopList += ('\n')
+			
+			self.checkRelsWindow.loopList = strLoopList
+			self.checkRelsWindow.txtArea.setPlainText(strLoopList)
+			
+			
+		#errorFlag, self.field = veam_main(veamVars, self) #Run 1 instance of VEAM!
+		'''
+		self.bSubmit.setEnabled(True) #Re-enable the Run VEAM Button
+		if errorFlag==0:
+			self.lblSubmit.setText('VEAM Completed!!')
+			sys.stdout.write('\nVEAM Completed!!\n\n')
+			self.progressWin.progress.setValue(100)
+			self.progressWin.btn.setEnabled(True)
+			self.progressWin.btn.clicked.connect(self.results)
+			
+		else:
+			self.lblSubmit.setText('VEAM had an error! Check console for info')
+			self.progressWin.close()
+		'''
+		
+		
+		
 	def updateListCts(self):
 		if self.listHigher.count():
 			self.lblHigherCt.setText(str(self.listHigher.count()))
@@ -773,7 +941,55 @@ class mainWindow(QtWidgets.QWidget):
 		self.listUnassigned.addItems(sorted(unassignedRels,key=str.casefold))
 		self.listHigher.addItems(sorted(higherRels,key=str.casefold))
 		self.listLower.addItems(sorted(lowerRels,key=str.casefold))
+
+
+class checkRelsWindow(QtWidgets.QWidget):
+	def __init__(self, parent=None):
+		super(checkRelsWindow, self).__init__()
+		self.init_ui()
 		
+	
+	def init_ui(self):
+		self.progress = QtWidgets.QProgressBar(self)
+		self.loopList = ''
+		
+		self.btnClose = QtWidgets.QPushButton("Close", self)
+		self.btnClose.setHidden(True)
+		self.btnCopy = QtWidgets.QPushButton("Copy List", self)
+		self.btnCopy.setHidden(True)
+		self.btnCopy.setDisabled(True)
+		
+		self.lblFoundLoops = QtWidgets.QLabel('')
+		self.lblRels = QtWidgets.QLabel('Checking All Relationships...')
+		self.txtArea = QtWidgets.QPlainTextEdit('Hi There!\nNice 2 meet u')
+		self.txtArea.setHidden(True)
+		self.txtArea.setReadOnly(True)
+		
+		h_box = QtWidgets.QHBoxLayout() #Vertical box
+		h_box.addWidget(self.btnCopy)
+		h_box.addWidget(self.btnClose)
+		#h_box.addWidget(self.btn)
+		
+		v_box = QtWidgets.QVBoxLayout()
+		v_box.addWidget(self.lblRels)
+		v_box.addWidget(self.lblFoundLoops)
+		v_box.addWidget(self.progress)
+		v_box.addWidget(self.txtArea)
+		v_box.addLayout(h_box)
+		
+		self.setLayout(v_box)
+		self.setGeometry(250, 200, 400, 10)
+		
+		self.btnCopy.clicked.connect(self.copyLoops)
+		self.btnClose.clicked.connect(self.close)
+		
+		self.setWindowTitle('Relationship Check')
+		self.show()
+		
+	
+	def copyLoops(self):
+		QtWidgets.QApplication.clipboard().setText(self.loopList)
+	
 
 def main():
 	### Define QT App Instance
@@ -782,7 +998,7 @@ def main():
 		app = QtWidgets.QApplication(sys.argv)
 
 	### Create a Window
-	VEAM_window = mainWindow()
+	STRAT_window = mainWindow()
 	
 	#Exit upon closed window
 	sys.exit(app.exec_())
